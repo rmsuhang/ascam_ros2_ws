@@ -1,0 +1,31 @@
+rsliadr1_filter_area:
+  x_axis:
+    min: -2.3
+    max: 5.0
+  y_axis:
+    min: -13.8
+    max: 19.2
+  z_axis:
+    min: -1.5
+    max: 4.5
+rsliadr2_filter_area:
+  x_axis:
+    min: -2.3
+    max: 5.0
+  y_axis:
+    min: -13.8
+    max: 19.2
+  z_axis:
+    min: -1.5
+    max: 4.5
+adjust_parameters:
+  co_distance: 0.1
+  max_iteration: 50
+  trans_epsilon: 1e-8
+  euc_epsilon: 0.25
+plc_connection:
+  ip: 192.168.89.149
+  rack: 0
+  slot: 2
+stop_position: 2.38
+chute_diameter: 2.3

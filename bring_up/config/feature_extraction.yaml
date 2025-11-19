@@ -1,0 +1,19 @@
+# 先用宽松参数确保能检测到特征
+# 逐步收紧参数提高检测质量
+# 根据实际凸起大小调整高度阈值
+# 根据处理速度需求调整体素大小
+
+feature_extraction_node:
+  ros__parameters:
+    reference_plane_distance: 0.285  #real
+    feature_threshold: 0.005 
+    min_feature_height: 0.0         
+    max_feature_height: 0.1
+    voxel_leaf_size: 0.005             
+    statistical_mean_k: 20             
+    statistical_stddev_mult: 1.0       
+    top_percentage: 50.0             
+    min_area_points: 10.0
+
+
+

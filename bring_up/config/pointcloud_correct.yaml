@@ -1,0 +1,10 @@
+pointcloud_correct_node:
+  ros__parameters:
+    target_frame: "ascamera_hp60c_camera_link_0_corrected"
+    source_frame: "ascamera_hp60c_camera_link_0"
+    pitch_angle: 0.0
+    roll_angle: 0.80 #相机俯角
+    yaw_angle: 0.0
+    timestamp_offset: 0.0
+    use_pcl_transform: true      # 启用PCL优化变换
+    use_parallel_processing: true # 启用并行处理

@@ -1,0 +1,433 @@
+// std
+#include <algorithm>
+#include <vector>
+#include <memory>
+#include <string>
+#include <numeric>  
+
+// ROS2
+#include <sensor_msgs/msg/point_cloud2.hpp>
+#include <visualization_msgs/msg/marker_array.hpp>
+#include <geometry_msgs/msg/point.hpp>
+#include <std_msgs/msg/color_rgba.hpp>
+
+// PCL
+#include <pcl_conversions/pcl_conversions.h>
+#include <pcl/point_cloud.h>
+#include <pcl/point_types.h>
+#include <pcl/filters/passthrough.h>
+#include <pcl/filters/voxel_grid.h>
+#include <pcl/filters/statistical_outlier_removal.h>
+#include <pcl/common/common.h>
+#include <pcl/search/kdtree.h>
+#include <pcl/surface/convex_hull.h> //面积计算
+
+// Project
+#include "feature_extraction/feature_extraction_node.hpp"
+
+namespace feature_extraction
+{
+
+FeatureExtractionNode::FeatureExtractionNode(const rclcpp::NodeOptions & options)
+    : Node("feature_extraction_node", options),
+      processed_cloud_(new pcl::PointCloud<pcl::PointXYZ>),
+      height_cloud_(new pcl::PointCloud<pcl::PointXYZI>),
+      processed_count_(0)
+{
+    // 参数声明
+    this->declare_parameter<double>("reference_plane_distance", 0.5);  // 参考平面到相机的距离（米）
+    this->declare_parameter<double>("feature_threshold", 0.002);       // 特征检测阈值（米）
+    this->declare_parameter<double>("min_feature_height", 0.003);      // 最小特征高度（米）
+    this->declare_parameter<double>("max_feature_height", 0.01);       // 最大特征高度（米）
+    this->declare_parameter<double>("voxel_leaf_size", 0.005);         // 体素滤波叶子大小
+    this->declare_parameter<int>("statistical_mean_k", 20);           // 统计滤波邻域点数
+    this->declare_parameter<double>("statistical_stddev_mult", 1.0);  // 统计滤波标准差倍数
+    this->declare_parameter<double>("top_percentage", 20.0);          // 统计前百分之多少的高度差
+    this->declare_parameter<double>("min_area_points", 10.0);         // 计算面积所需的最小点数
+    
+    // 获取参数
+    reference_plane_distance_ = this->get_parameter("reference_plane_distance").as_double();
+    feature_threshold_ = this->get_parameter("feature_threshold").as_double();
+    min_feature_height_ = this->get_parameter("min_feature_height").as_double();
+    max_feature_height_ = this->get_parameter("max_feature_height").as_double();
+    voxel_leaf_size_ = this->get_parameter("voxel_leaf_size").as_double();// 体素滤波叶子大小，它通过将点云空间划分为规则的体素网格，
+                                                                          //然后用每个体素内所有点的重心或中心点来代表该体素内的点
+                                                                          //从而减少点云数量，同时保持点云的宏观形状特征。
+    statistical_mean_k_ = this->get_parameter("statistical_mean_k").as_int();
+    statistical_stddev_mult_ = this->get_parameter("statistical_stddev_mult").as_double();
+    top_percentage_ = this->get_parameter("top_percentage").as_double();
+    min_area_points_ = this->get_parameter("min_area_points").as_double();
+
+    // 订阅校正后的点云
+    pointcloud_sub_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
+        "/ascamera_hp60c_corrected/camera_publisher/depth0/points", 
+        rclcpp::QoS(rclcpp::KeepLast(10)),
+        std::bind(&FeatureExtractionNode::pointcloudCallback, this, std::placeholders::_1));
+    
+    // 发布特征点云
+    feature_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
+        "/features/extracted_features", 
+        rclcpp::QoS(rclcpp::KeepLast(10)));
+    
+    // 发布高度图点云
+    height_map_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
+        "/features/height_map", 
+        rclcpp::QoS(rclcpp::KeepLast(10)));
+    
+    // 发布显著特征可视化标记
+    marker_pub_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
+        "/features/visualization_markers", 
+        rclcpp::QoS(rclcpp::KeepLast(10)));
+
+    //高度差统计数据 
+    height_stats_pub_ = this->create_publisher<std_msgs::msg::Float32>(
+        "/features/height_statistics", 
+        rclcpp::QoS(rclcpp::KeepLast(10)));
+
+    //发布面积数据
+    area_pub_ = this->create_publisher<std_msgs::msg::Float32>(
+        "/features/feature_area", 
+        rclcpp::QoS(rclcpp::KeepLast(10)));
+
+    RCLCPP_INFO(this->get_logger(), 
+                "Feature extraction node initialized with reference plane distance: %.3f m", 
+                reference_plane_distance_);
+
+    RCLCPP_INFO(this->get_logger(), 
+                "Top percentage for height statistics: %.1f%%", top_percentage_);
+
+    RCLCPP_INFO(this->get_logger(), 
+                "Minimum points for area calculation: %.0f", min_area_points_);
+}
+
+void FeatureExtractionNode::pointcloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
+{
+    //auto start_time = std::chrono::high_resolution_clock::now();
+    
+    
+    // 提取特征
+    extractFeatures(msg);
+    
+    // 发布高度图
+    publishHeightMap(msg);
+    
+    processed_count_++;
+    
+    // // 定期输出统计信息
+    // if (processed_count_ % 100 == 0) {
+    //     auto end_time = std::chrono::high_resolution_clock::now();
+    //     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+    //     RCLCPP_DEBUG(this->get_logger(), "Feature extraction time: %ld ms", duration.count());
+    // }
+}
+
+void FeatureExtractionNode::extractFeatures(const sensor_msgs::msg::PointCloud2::SharedPtr input_cloud_msg)
+{
+
+    // 转换为PCL点云
+    pcl::PointCloud<pcl::PointXYZ>::Ptr pcl_cloud_(new pcl::PointCloud<pcl::PointXYZ>);
+
+    pcl::fromROSMsg(*input_cloud_msg, *pcl_cloud_);
+    
+    // 1. 预处理：体素滤波降采样
+    pcl::PointCloud<pcl::PointXYZ>::Ptr filtered_cloud(new pcl::PointCloud<pcl::PointXYZ>);
+    pcl::VoxelGrid<pcl::PointXYZ> voxel_filter;
+    voxel_filter.setInputCloud(pcl_cloud_);
+    voxel_filter.setLeafSize(voxel_leaf_size_, voxel_leaf_size_, voxel_leaf_size_);
+    voxel_filter.filter(*filtered_cloud);
+    
+    // 2. 统计滤波去除离群点
+    pcl::PointCloud<pcl::PointXYZ>::Ptr inlier_cloud(new pcl::PointCloud<pcl::PointXYZ>);
+    pcl::StatisticalOutlierRemoval<pcl::PointXYZ> sor_filter;
+    sor_filter.setInputCloud(filtered_cloud);//设置输入点云
+    sor_filter.setMeanK(statistical_mean_k_);//设置查询点的邻域点数
+    sor_filter.setStddevMulThresh(statistical_stddev_mult_);//设置标准差倍数阈值
+    sor_filter.filter(*inlier_cloud);//执行滤波，保存内点到inlier_cloud
+    
+    // 3. 计算高度差并提取特征点
+    pcl::PointCloud<pcl::PointXYZI>::Ptr feature_cloud(new pcl::PointCloud<pcl::PointXYZI>);
+    std::vector<pcl::PointXYZ> significant_features;
+    std::vector<double> height_differences;  // 存储所有特征点的高度差
+
+    for (const auto& point : inlier_cloud->points) {
+
+        //RCLCPP_INFO(this->get_logger(), "point.z : %.3f m", point.z);
+        
+        // 计算相对于参考平面的高度
+        double height_difference = reference_plane_distance_- point.z ;
+        
+        // 检查是否超过特征阈值
+        if (height_difference> feature_threshold_ && 
+            height_difference >= min_feature_height_ && 
+            height_difference <= max_feature_height_) {
+            
+            pcl::PointXYZI feature_point;
+            feature_point.x = point.x;
+            feature_point.y = point.y;
+            feature_point.z = point.z;
+            feature_point.intensity = height_difference;  // 强度值存储高度差
+            
+            feature_cloud->points.push_back(feature_point);
+            height_differences.push_back(height_difference);  // 储存高度差
+
+            // 记录显著特征点用于可视化
+            if (height_difference > feature_threshold_ * 2) {
+                significant_features.push_back(point);
+            }
+        }
+    }
+
+    //4. 计算特征点的面积
+    double feature_area = calculateFeatureArea(feature_cloud);
+
+    // 5. 发布特征点云
+    if (!feature_cloud->empty()) {
+        sensor_msgs::msg::PointCloud2 feature_msg;
+        pcl::toROSMsg(*feature_cloud, feature_msg);
+        feature_msg.header = input_cloud_msg->header;//与输入点云的信息同步
+        feature_msg.header.frame_id = input_cloud_msg->header.frame_id;
+        feature_pub_->publish(feature_msg);
+        
+        // 发布可视化标记
+        //publishFeatureMarkers(significant_features);
+        
+        RCLCPP_DEBUG(this->get_logger(), "Extracted %zu feature points", feature_cloud->size());
+        
+        //发布面积数据
+        std_msgs::msg::Float32 area_msg;
+        area_msg.data = feature_area;
+        area_pub_->publish(area_msg);
+
+        RCLCPP_INFO(this->get_logger(), 
+            "Feature area in XY plane: %.6f m² (based on %zu points)", 
+            feature_area, feature_cloud->size());
+    }
+    
+
+    // 6. 统计高度差并发布结果
+    if (!height_differences.empty()) {
+        double top_height_average = calculateTopHeightAverage(height_differences);
+        
+        // 发布高度差统计数据
+        std_msgs::msg::Float32 height_stats_msg;
+        height_stats_msg.data = top_height_average;
+        height_stats_pub_->publish(height_stats_msg);
+        
+        RCLCPP_INFO(this->get_logger(), 
+                   "Height statistics - Total features: %zu, Top %.1f%% average height: %.4f m", 
+                   height_differences.size(), top_percentage_, top_height_average);
+    }
+}
+
+//使用凸包计算投影面积
+double FeatureExtractionNode::calculateFeatureArea(const pcl::PointCloud<pcl::PointXYZI>::Ptr feature_cloud)
+{
+    if (feature_cloud->size() < min_area_points_) {
+        RCLCPP_DEBUG(this->get_logger(), 
+                    "Not enough points for area calculation: %zu < %.0f", 
+                    feature_cloud->size(), min_area_points_);
+        return 0.0;
+    }
+    
+    // 方法1: 使用凸包计算投影面积（更准确）
+    pcl::PointCloud<pcl::PointXYZ>::Ptr xy_projection(new pcl::PointCloud<pcl::PointXYZ>);
+    
+    // 将特征点投影到XY平面（z=0）
+    for (const auto& point : feature_cloud->points) {
+        pcl::PointXYZ projected_point;
+        projected_point.x = point.x;
+        projected_point.y = point.y;
+        projected_point.z = 0.0;  // 投影到XY平面
+        xy_projection->push_back(projected_point);
+    }
+    
+    // 计算凸包
+    pcl::ConvexHull<pcl::PointXYZ> convex_hull;
+    pcl::PointCloud<pcl::PointXYZ> hull_points;
+    
+    try {
+        convex_hull.setInputCloud(xy_projection);
+        convex_hull.reconstruct(hull_points);
+        
+        if (hull_points.size() < 3) {
+            RCLCPP_WARN(this->get_logger(), 
+                       "Convex hull calculation failed: only %zu points in hull", 
+                       hull_points.size());
+            return calculateBoundingBoxArea(feature_cloud);  // 回退到边界框方法
+        }
+        
+        // 计算凸包面积（多边形面积）
+        double area = 0.0;
+        size_t n = hull_points.size();
+        
+        for (size_t i = 0; i < n; ++i) {
+            const auto& p1 = hull_points[i];
+            const auto& p2 = hull_points[(i + 1) % n];
+            area += (p1.x * p2.y - p2.x * p1.y);
+        }
+        
+        double convex_hull_area = std::abs(area) / 2.0;
+        
+        RCLCPP_DEBUG(this->get_logger(), 
+                    "Convex hull area: %.6f m² (hull points: %zu)", 
+                    convex_hull_area, hull_points.size());
+        
+        return convex_hull_area;
+        
+    } catch (const std::exception& e) {
+        RCLCPP_ERROR(this->get_logger(), 
+                    "Convex hull calculation failed: %s. Using bounding box method.", 
+                    e.what());
+        return calculateBoundingBoxArea(feature_cloud);
+    }
+}
+
+double FeatureExtractionNode::calculateBoundingBoxArea(const pcl::PointCloud<pcl::PointXYZI>::Ptr feature_cloud)
+{
+    // 方法2: 计算边界框面积（简单但不够准确）
+    pcl::PointXYZI min_pt, max_pt;
+    
+    // 使用正确的模板特化
+    pcl::getMinMax3D<pcl::PointXYZI>(*feature_cloud, min_pt, max_pt);
+    
+    double width = max_pt.x - min_pt.x;
+    double height = max_pt.y - min_pt.y;
+    double bbox_area = width * height;
+    
+    RCLCPP_DEBUG(this->get_logger(), 
+                "Bounding box area: %.6f m² (%.3f x %.3f m)", 
+                bbox_area, width, height);
+    
+    return bbox_area;
+}
+
+double FeatureExtractionNode::calculateTopHeightAverage(const std::vector<double>& height_differences)
+{
+    if (height_differences.empty()) {
+        return 0.0;
+    }
+    
+    // 复制高度差数据以便排序
+    std::vector<double> sorted_heights = height_differences;
+    
+    // 从大到小排序
+    std::sort(sorted_heights.begin(), sorted_heights.end(), std::greater<double>());
+    
+    // 计算前百分之多少的点数
+    size_t top_count = static_cast<size_t>(sorted_heights.size() * (top_percentage_ / 100.0));
+    
+    // 确保至少有一个点
+    if (top_count == 0) {
+        top_count = 1;
+    }
+    
+    // 确保不超过总数
+    if (top_count > sorted_heights.size()) {
+        top_count = sorted_heights.size();
+    }
+    
+    // 计算前top_count个点的平均值
+    double sum = 0.0;
+    for (size_t i = 0; i < top_count; ++i) {
+        sum += sorted_heights[i];
+    }
+    
+    double average = sum / top_count;
+    
+    // 输出详细统计信息
+    RCLCPP_DEBUG(this->get_logger(), 
+                "Height statistics details: Total=%zu, Top %zu points (%.1f%%), "
+                "Min=%.4f, Max=%.4f, Average=%.4f m", 
+                sorted_heights.size(), top_count, top_percentage_,
+                sorted_heights.back(), sorted_heights.front(), average);
+    
+    return average;
+}
+
+void FeatureExtractionNode::publishHeightMap(const sensor_msgs::msg::PointCloud2::SharedPtr input_cloud_msg)
+{
+    pcl::PointCloud<pcl::PointXYZ>::Ptr pcl_cloud_(new pcl::PointCloud<pcl::PointXYZ>);
+    pcl::fromROSMsg(*input_cloud_msg, *pcl_cloud_);
+
+    // 创建高度图点云
+    height_cloud_->clear();
+    height_cloud_->header = pcl_cloud_->header;
+    height_cloud_->width = pcl_cloud_->width;
+    height_cloud_->height = pcl_cloud_->height;
+    height_cloud_->is_dense = pcl_cloud_->is_dense;
+    height_cloud_->points.resize(pcl_cloud_->points.size());
+    
+    // 计算每个点的高度差
+    for (size_t i = 0; i < pcl_cloud_->points.size(); ++i) {
+        const auto& input_point = pcl_cloud_->points[i];
+        auto& output_point = height_cloud_->points[i];
+        
+        output_point.x = input_point.x;
+        output_point.y = input_point.y;
+        output_point.z = input_point.z;
+        
+        // 强度值表示相对于参考平面的高度差
+        double height_difference = input_point.z - reference_plane_distance_;
+        output_point.intensity = height_difference;
+    }
+    
+    // 发布高度图
+    sensor_msgs::msg::PointCloud2 height_msg;
+    pcl::toROSMsg(*height_cloud_, height_msg);
+    height_msg.header = input_cloud_msg->header;
+    height_msg.header.frame_id = input_cloud_msg->header.frame_id;
+    height_map_pub_->publish(height_msg);
+}
+
+void FeatureExtractionNode::publishFeatureMarkers(const std::vector<pcl::PointXYZ>& features)
+{
+    visualization_msgs::msg::MarkerArray marker_array;
+    
+    // 清除之前的标记
+    visualization_msgs::msg::Marker clear_marker;
+    clear_marker.header.frame_id = "ascamera_hp60c_camera_link_0_corrected";
+    clear_marker.header.stamp = this->now();
+    clear_marker.ns = "features";
+    clear_marker.id = 0;
+    clear_marker.action = visualization_msgs::msg::Marker::DELETEALL;
+    marker_array.markers.push_back(clear_marker);
+    
+    // 创建特征点标记
+    for (size_t i = 0; i < features.size(); ++i) {
+        visualization_msgs::msg::Marker marker;
+        marker.header.frame_id = "ascamera_hp60c_camera_link_0_corrected";
+        marker.header.stamp = this->now();
+        marker.ns = "features";
+        marker.id = i + 1;
+        marker.type = visualization_msgs::msg::Marker::SPHERE;
+        marker.action = visualization_msgs::msg::Marker::ADD;
+        
+        // 设置位置
+        marker.pose.position.x = features[i].x;
+        marker.pose.position.y = features[i].y;
+        marker.pose.position.z = features[i].z;
+        marker.pose.orientation.w = 1.0;
+        
+        // 设置大小和颜色
+        marker.scale.x = 0.05;  // 5cm 半径
+        marker.scale.y = 0.05;
+        marker.scale.z = 0.05;
+        
+        marker.color.r = 1.0;  // 红色
+        marker.color.g = 0.0;
+        marker.color.b = 0.0;
+        marker.color.a = 0.8;  // 半透明
+        
+        marker.lifetime = rclcpp::Duration::from_seconds(1.0);  // 1秒生命周期
+        
+        marker_array.markers.push_back(marker);
+    }
+    
+    // 发布标记
+    marker_pub_->publish(marker_array);
+}
+
+} // namespace feature_extraction
+
+#include "rclcpp_components/register_node_macro.hpp"
+RCLCPP_COMPONENTS_REGISTER_NODE(feature_extraction::FeatureExtractionNode)

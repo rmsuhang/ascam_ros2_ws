@@ -1,42 +1,43 @@
-# 定量装车项目
+# 自动测量水泥塌落度项目
 
 ## project environment
     1. ros2 humble：提供项目框架
 
-    2. anaconda3+py3.10+pytorch+yolov5（版本不要太高）：处理深度学习算法部分
-
-    3. sanp7：plc通信部分
+    2. sanp7：plc通信部分
     
-    4. others：运行过程中缺少什么安装什么即可
+    3. others：运行过程中缺少什么安装什么即可
 
 ## package overview
 
-    1. calibrate_point_cloud：点云配准算法，使用icp算法，输出一个刚体变换，使源点云和目标点云重合度最高
+    1. ascamera：官方相机包，发布rgb，depth，pointcloud
 
-    2. baffle_node：根据配准后的点云图像进行挡板检测，前挡板，后挡板，下料口
+    2. pointcloud_correct：点云坐标变换节点，修正相机俯角带来的影响
 
-    3. detection_bbox_node：根据识别结果，计算并更新配置文件中的挡板位置参数
+    3. feature_extraction：特征提取节点，根据深度信息，提取水泥，计算水泥塌落度，延展度
 
-    4. calibrate_launch：launch文件，启动1，2，3节点
+    4. plc_communication：plc通信节点，订阅塌落度和延展度数据，发送给plc
 
-    5. process_point_cloud：整合了1,3节点和plc通信
+    5. bring_up：整个项目的launch文件，集合了各个节点的config，负责顺序启动各个节点
 
-    6. python_algorithms:python算法集合
-
-            ├──baffle_node：挡板检测
-
-            ├──carriage_node：车厢分割+尺寸检测
-
-            ├──carriage_node_utils：车厢分割工具类
-
-            ├──pointnet_part_seg_msg：pointnet算法
-            
-            ├──pointnet2_utils：pointnet算法工具类
-                     
-    7. process_cloud_launch：launch文件，启动5，6相关节点
 
 ## usage：
  
-    1. 算法测试（不跟plc通信）：运行calibrate_launch包，完成点云融合配准，运行process_cloud_launch包，只带起carriage_node一个节点
+    1. 完整部署：运行bring_up包，带起ascamera, pointcloud_correct, feature_extraction，plc_communication四个节点
 
-    2. 完整部署：运行process_cloud_launch包，带起process_node, baffle_node, carriage_node三个节点
+## notice：
+    
+    1. 在使用snap7与西门子smart-200系列通信时，rack_number设置为1,同时要用执行 SetConnectionType(3)函数，更改默认连接类型
+
+    2. 如果采用网线直连plc，需手动设置上位机ip和plc处于同一网段，并且将plc的ip设置为网关，
+
+        例如plc的ip为192.168.2.1 ：
+
+            则上位机的ip设置为192.168.2.1～192.168.2.255任意一个
+
+            子网掩码设置为255.255.255.0
+
+            网关设置为192.168.2.1（plc的ip地址）
+
+            然后ping一下plc的ip地址，看能否建立连接，能够ping通即说明成功
+
+    3. 如果有wifi只需要上位机和plc都连接到wifi，然后ping一下plc的ip，跳过手动设置ip的部分，自动获取ip即可

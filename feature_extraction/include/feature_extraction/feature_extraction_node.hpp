@@ -11,6 +11,7 @@
 #include <pcl/filters/statistical_outlier_removal.h>
 #include <visualization_msgs/msg/marker_array.hpp>
 #include <geometry_msgs/msg/point.hpp>
+#include <geometry_msgs/msg/vector3.hpp> 
 #include <std_msgs/msg/color_rgba.hpp>
 #include <std_msgs/msg/float32.hpp>
 
@@ -30,14 +31,15 @@ private:
     double calculateTopHeightAverage(const std::vector<double>& height_differences); 
     double calculateFeatureArea(const pcl::PointCloud<pcl::PointXYZI>::Ptr feature_cloud);
     double calculateBoundingBoxArea(const pcl::PointCloud<pcl::PointXYZI>::Ptr feature_cloud);
-    
+    std::pair<double, double> calculateBoundingBoxDimensions(const pcl::PointCloud<pcl::PointXYZI>::Ptr feature_cloud);//计算两个方向的直径
+
     // ROS2
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_sub_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr feature_pub_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr marker_pub_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr height_map_pub_;
     rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr height_stats_pub_; 
-    rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr area_pub_;
+    rclcpp::Publisher<geometry_msgs::msg::Vector3>::SharedPtr bbox_size_pub_;
     
     // 参数
     double reference_plane_distance_;

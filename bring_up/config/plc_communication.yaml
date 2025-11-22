@@ -6,7 +6,8 @@ plc_communication_node:
     
     db_number: 1                   # 数据块编号
     data_offset_height: 700        # 数据偏移地址（字节） 
-    data_offset_area: 704          # 数据偏移地址（字节）
+    data_offset_length: 704          # 数据偏移地址（字节）
+    data_offset_width: 708          # 数据偏移地址（字节）
 
     plc_data_type: 0               # 数据类型: 0-REAL, 1-INT, 2-DINT
     

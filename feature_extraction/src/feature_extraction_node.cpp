@@ -20,7 +20,6 @@
 #include <pcl/filters/statistical_outlier_removal.h>
 #include <pcl/common/common.h>
 #include <pcl/search/kdtree.h>
-#include <pcl/surface/convex_hull.h> //面积计算
 
 // Project
 #include "feature_extraction/feature_extraction_node.hpp"
@@ -84,9 +83,9 @@ FeatureExtractionNode::FeatureExtractionNode(const rclcpp::NodeOptions & options
         "/features/height_statistics", 
         rclcpp::QoS(rclcpp::KeepLast(10)));
 
-    //发布面积数据
-    area_pub_ = this->create_publisher<std_msgs::msg::Float32>(
-        "/features/feature_area", 
+    // 发布边界框尺寸数据
+    bbox_size_pub_ = this->create_publisher<geometry_msgs::msg::Vector3>(
+        "/features/bounding_box_dimensions", 
         rclcpp::QoS(rclcpp::KeepLast(10)));
 
     RCLCPP_INFO(this->get_logger(), 
@@ -177,8 +176,8 @@ void FeatureExtractionNode::extractFeatures(const sensor_msgs::msg::PointCloud2:
         }
     }
 
-    //4. 计算特征点的面积
-    double feature_area = calculateFeatureArea(feature_cloud);
+    // 4. 计算特征点的边界框尺寸
+    auto bbox_dimensions = calculateBoundingBoxDimensions(feature_cloud);
 
     // 5. 发布特征点云
     if (!feature_cloud->empty()) {
@@ -193,14 +192,17 @@ void FeatureExtractionNode::extractFeatures(const sensor_msgs::msg::PointCloud2:
         
         RCLCPP_DEBUG(this->get_logger(), "Extracted %zu feature points", feature_cloud->size());
         
-        //发布面积数据
-        std_msgs::msg::Float32 area_msg;
-        area_msg.data = feature_area;
-        area_pub_->publish(area_msg);
+        // 发布边界框尺寸数据
+        geometry_msgs::msg::Vector3 bbox_msg;
+        bbox_msg.x = bbox_dimensions.first;  // 长度
+        bbox_msg.y = bbox_dimensions.second; // 宽度
+        bbox_msg.z = bbox_dimensions.first * bbox_dimensions.second; // 面积（可选）
+        bbox_size_pub_->publish(bbox_msg);
 
-        RCLCPP_INFO(this->get_logger(), 
-            "Feature area in XY plane: %.6f m² (based on %zu points)", 
-            feature_area, feature_cloud->size());
+        // RCLCPP_INFO(this->get_logger(), 
+        //     "Bounding box dimensions - Length: %.6f m, Width: %.6f m, Area: %.6f m² (based on %zu points)", 
+        //     bbox_dimensions.first, bbox_dimensions.second, 
+        //     bbox_dimensions.first * bbox_dimensions.second, feature_cloud->size());
     }
     
 
@@ -213,74 +215,36 @@ void FeatureExtractionNode::extractFeatures(const sensor_msgs::msg::PointCloud2:
         height_stats_msg.data = top_height_average;
         height_stats_pub_->publish(height_stats_msg);
         
-        RCLCPP_INFO(this->get_logger(), 
-                   "Height statistics - Total features: %zu, Top %.1f%% average height: %.4f m", 
-                   height_differences.size(), top_percentage_, top_height_average);
+        // RCLCPP_INFO(this->get_logger(), 
+        //            "Height statistics - Total features: %zu, Top %.1f%% average height: %.4f m", 
+        //            height_differences.size(), top_percentage_, top_height_average);
     }
 }
 
-//使用凸包计算投影面积
-double FeatureExtractionNode::calculateFeatureArea(const pcl::PointCloud<pcl::PointXYZI>::Ptr feature_cloud)
+std::pair<double, double> FeatureExtractionNode::calculateBoundingBoxDimensions(
+    const pcl::PointCloud<pcl::PointXYZI>::Ptr feature_cloud)
 {
     if (feature_cloud->size() < min_area_points_) {
         RCLCPP_DEBUG(this->get_logger(), 
-                    "Not enough points for area calculation: %zu < %.0f", 
+                    "Not enough points for bounding box calculation: %zu < %.0f", 
                     feature_cloud->size(), min_area_points_);
-        return 0.0;
+        return std::make_pair(0.0, 0.0);
     }
     
-    // 方法1: 使用凸包计算投影面积（更准确）
-    pcl::PointCloud<pcl::PointXYZ>::Ptr xy_projection(new pcl::PointCloud<pcl::PointXYZ>);
+    // 计算边界框
+    pcl::PointXYZI min_pt, max_pt;
+    pcl::getMinMax3D<pcl::PointXYZI>(*feature_cloud, min_pt, max_pt);
     
-    // 将特征点投影到XY平面（z=0）
-    for (const auto& point : feature_cloud->points) {
-        pcl::PointXYZ projected_point;
-        projected_point.x = point.x;
-        projected_point.y = point.y;
-        projected_point.z = 0.0;  // 投影到XY平面
-        xy_projection->push_back(projected_point);
-    }
+    double length = max_pt.x - min_pt.x;   // X方向尺寸
+    double width = max_pt.y - min_pt.y;    // Y方向尺寸
     
-    // 计算凸包
-    pcl::ConvexHull<pcl::PointXYZ> convex_hull;
-    pcl::PointCloud<pcl::PointXYZ> hull_points;
+    RCLCPP_DEBUG(this->get_logger(), 
+                "Bounding box - Length (X): %.6f m, Width (Y): %.6f m", 
+                length, width);
     
-    try {
-        convex_hull.setInputCloud(xy_projection);
-        convex_hull.reconstruct(hull_points);
-        
-        if (hull_points.size() < 3) {
-            RCLCPP_WARN(this->get_logger(), 
-                       "Convex hull calculation failed: only %zu points in hull", 
-                       hull_points.size());
-            return calculateBoundingBoxArea(feature_cloud);  // 回退到边界框方法
-        }
-        
-        // 计算凸包面积（多边形面积）
-        double area = 0.0;
-        size_t n = hull_points.size();
-        
-        for (size_t i = 0; i < n; ++i) {
-            const auto& p1 = hull_points[i];
-            const auto& p2 = hull_points[(i + 1) % n];
-            area += (p1.x * p2.y - p2.x * p1.y);
-        }
-        
-        double convex_hull_area = std::abs(area) / 2.0;
-        
-        RCLCPP_DEBUG(this->get_logger(), 
-                    "Convex hull area: %.6f m² (hull points: %zu)", 
-                    convex_hull_area, hull_points.size());
-        
-        return convex_hull_area;
-        
-    } catch (const std::exception& e) {
-        RCLCPP_ERROR(this->get_logger(), 
-                    "Convex hull calculation failed: %s. Using bounding box method.", 
-                    e.what());
-        return calculateBoundingBoxArea(feature_cloud);
-    }
+    return std::make_pair(length, width);
 }
+
 
 double FeatureExtractionNode::calculateBoundingBoxArea(const pcl::PointCloud<pcl::PointXYZI>::Ptr feature_cloud)
 {

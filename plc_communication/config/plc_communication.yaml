@@ -1,14 +1,15 @@
 plc_communication_node:
   ros__parameters:
-    plc_ip: "192.168.2.1"    # PLC的IP地址
-    plc_rack: 0              # 机架号
-    plc_slot: 1              # 槽号
+    plc_ip: "192.168.2.1"          # PLC的IP地址
+    plc_rack: 0                    # 机架号
+    plc_slot: 1                    # 槽号
     
-    db_number: 1             # 数据块编号
-    data_offset_height: 600           # 数据偏移地址（字节）
-    data_offset_area: 604           # 数据偏移地址（字节）
+    db_number: 1                   # 数据块编号
+    data_offset_height: 700        # 数据偏移地址（字节） 
+    data_offset_length: 704          # 数据偏移地址（字节）
+    data_offset_width: 708          # 数据偏移地址（字节）
 
-    plc_data_type: 0         # 数据类型: 0-REAL, 1-INT, 2-DINT
+    plc_data_type: 0               # 数据类型: 0-REAL, 1-INT, 2-DINT
     
-    min_height: 0.0          # 最小有效高度（米）
-    max_height: 0.5          # 最大有效高度（米）.
+    min_height: 0.0                # 最小有效高度（米）
+    max_height: 0.5                # 最大有效高度（米）.

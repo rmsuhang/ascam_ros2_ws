@@ -6,6 +6,7 @@
 #include "snap7.h"
 #include <memory>
 #include <string>
+#include <geometry_msgs/msg/vector3.hpp> 
 
 namespace plc_communication
 {
@@ -17,7 +18,7 @@ public:
 
 private:
     void heightCallback(const std_msgs::msg::Float32::SharedPtr msg);
-    void areaCallback(const std_msgs::msg::Float32::SharedPtr msg);
+    void bboxCallback(const geometry_msgs::msg::Vector3::SharedPtr msg);
     bool connectToPLC();
     void disconnectFromPLC();
     bool sendDataToPLC(double value,int offset);
@@ -30,7 +31,8 @@ private:
     int plc_slot_;
     int db_number_;
     int data_offset_height_;
-    int data_offset_area_;
+    int data_offset_length_;
+    int data_offset_width_;
     int plc_data_type_;
     bool is_connected_ = false;
     
@@ -40,7 +42,7 @@ private:
     
     // ROS2相关
     rclcpp::Subscription<std_msgs::msg::Float32>::SharedPtr height_sub_;
-    rclcpp::Subscription<std_msgs::msg::Float32>::SharedPtr area_sub_;
+    rclcpp::Subscription<geometry_msgs::msg::Vector3>::SharedPtr bbox_sub_;
     rclcpp::TimerBase::SharedPtr connection_timer_;
     rclcpp::Time last_success_time_;
 };

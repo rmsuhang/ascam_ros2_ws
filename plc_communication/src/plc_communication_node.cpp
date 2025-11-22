@@ -15,8 +15,10 @@ PLCCommunicationNode::PLCCommunicationNode(const rclcpp::NodeOptions & options)
     this->declare_parameter<int>("plc_rack", 0);
     this->declare_parameter<int>("plc_slot", 2);
     this->declare_parameter<int>("db_number", 1);
-    this->declare_parameter<int>("data_offset_height", 0);
-    this->declare_parameter<int>("data_offset_area", 4);//面积数据偏移地址
+    this->declare_parameter<int>("data_offset_height",700);
+    this->declare_parameter<int>("data_offset_length", 704);//面积数据偏移地址
+    this->declare_parameter<int>("data_offset_width", 708);//面积数据偏移地址
+
     this->declare_parameter<double>("min_height", 0.0);
     this->declare_parameter<double>("max_height", 1.0);
     this->declare_parameter<int>("plc_data_type", 0);  // 0:REAL, 1:INT, 2:DINT
@@ -26,7 +28,8 @@ PLCCommunicationNode::PLCCommunicationNode(const rclcpp::NodeOptions & options)
     plc_slot_ = this->get_parameter("plc_slot").as_int();
     db_number_ = this->get_parameter("db_number").as_int();
     data_offset_height_ = this->get_parameter("data_offset_height").as_int();
-    data_offset_area_ = this->get_parameter("data_offset_area").as_int();
+    data_offset_length_ = this->get_parameter("data_offset_length").as_int();
+    data_offset_width_ = this->get_parameter("data_offset_width").as_int();
     min_height_ = this->get_parameter("min_height").as_double();
     max_height_ = this->get_parameter("max_height").as_double();
     plc_data_type_ = this->get_parameter("plc_data_type").as_int();
@@ -40,12 +43,13 @@ PLCCommunicationNode::PLCCommunicationNode(const rclcpp::NodeOptions & options)
         "/features/height_statistics",
         rclcpp::QoS(rclcpp::KeepLast(10)),
         std::bind(&PLCCommunicationNode::heightCallback, this, std::placeholders::_1));
-    
-    // 新增：订阅面积数据
-    area_sub_ = this->create_subscription<std_msgs::msg::Float32>(
-        "/features/feature_area",
+
+    // 订阅边界框尺寸数据
+    bbox_sub_ = this->create_subscription<geometry_msgs::msg::Vector3>(
+        "/features/bounding_box_dimensions",
         rclcpp::QoS(rclcpp::KeepLast(10)),
-        std::bind(&PLCCommunicationNode::areaCallback, this, std::placeholders::_1));
+        std::bind(&PLCCommunicationNode::bboxCallback, this, std::placeholders::_1));
+
         
     // 连接PLC
     if (connectToPLC()) {
@@ -70,7 +74,7 @@ PLCCommunicationNode::~PLCCommunicationNode()
 void PLCCommunicationNode::heightCallback(const std_msgs::msg::Float32::SharedPtr msg)
 {
     double height_value = msg->data;
-    
+
     // 发送数据到PLC
     if (sendDataToPLC(height_value, data_offset_height_)) {
         RCLCPP_INFO(this->get_logger(), 
@@ -81,22 +85,38 @@ void PLCCommunicationNode::heightCallback(const std_msgs::msg::Float32::SharedPt
                     "Failed to send height value %.4f to PLC at offset %d", 
                     height_value, data_offset_height_);
     }
+
+    
 }
 
 
-void PLCCommunicationNode::areaCallback(const std_msgs::msg::Float32::SharedPtr msg)
+void PLCCommunicationNode::bboxCallback(const geometry_msgs::msg::Vector3::SharedPtr msg)
 {
-    double area_value = msg->data;
-    // 发送数据到PLC
-    if (sendDataToPLC(area_value, data_offset_area_)) {
+    double length_value = msg->x;  // 长度数据
+    double width_value = msg->y;   // 宽度数据
+
+    // 发送长度数据到PLC
+    if (sendDataToPLC(length_value, data_offset_length_)) {
         RCLCPP_INFO(this->get_logger(), 
-                    "Successfully sent area value %.6f to PLC at offset %d", 
-                    area_value, data_offset_area_);
+                    "Successfully sent length value %.6f to PLC at offset %d", 
+                    length_value, data_offset_length_);
     } else {
         RCLCPP_INFO(this->get_logger(), 
-                    "Failed to send area value %.6f to PLC at offset %d", 
-                    area_value, data_offset_area_);
+                    "Failed to send length value %.6f to PLC at offset %d", 
+                    length_value, data_offset_length_);
     }
+
+    // 发送宽度数据到PLC
+    if (sendDataToPLC(width_value, data_offset_width_)) {
+        RCLCPP_INFO(this->get_logger(), 
+                    "Successfully sent width value %.6f to PLC at offset %d", 
+                    width_value, data_offset_width_);
+    } else {
+        RCLCPP_INFO(this->get_logger(), 
+                    "Failed to send width value %.6f to PLC at offset %d", 
+                    width_value, data_offset_width_);
+    }
+
 }
 
 // 连接到PLC

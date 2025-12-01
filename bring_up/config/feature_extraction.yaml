@@ -13,7 +13,7 @@ feature_extraction_node:
     statistical_mean_k: 20             
     statistical_stddev_mult: 1.0       
     top_percentage: 50.0             
-    min_area_points: 10.0
+    min_area_points: 100.0
 
 
 

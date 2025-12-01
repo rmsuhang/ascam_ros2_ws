@@ -42,7 +42,7 @@ FeatureExtractionNode::FeatureExtractionNode(const rclcpp::NodeOptions & options
     this->declare_parameter<int>("statistical_mean_k", 20);           // 统计滤波邻域点数
     this->declare_parameter<double>("statistical_stddev_mult", 1.0);  // 统计滤波标准差倍数
     this->declare_parameter<double>("top_percentage", 20.0);          // 统计前百分之多少的高度差
-    this->declare_parameter<double>("min_area_points", 10.0);         // 计算面积所需的最小点数
+    this->declare_parameter<double>("min_area_points", 100.0);         // 计算面积所需的最小点数
     
     // 获取参数
     reference_plane_distance_ = this->get_parameter("reference_plane_distance").as_double();
@@ -199,10 +199,10 @@ void FeatureExtractionNode::extractFeatures(const sensor_msgs::msg::PointCloud2:
         bbox_msg.z = bbox_dimensions.first * bbox_dimensions.second; // 面积（可选）
         bbox_size_pub_->publish(bbox_msg);
 
-        // RCLCPP_INFO(this->get_logger(), 
-        //     "Bounding box dimensions - Length: %.6f m, Width: %.6f m, Area: %.6f m² (based on %zu points)", 
-        //     bbox_dimensions.first, bbox_dimensions.second, 
-        //     bbox_dimensions.first * bbox_dimensions.second, feature_cloud->size());
+        RCLCPP_INFO(this->get_logger(), 
+            "Bounding box dimensions - Length: %.6f m, Width: %.6f m, Area: %.6f m² (based on %zu points)", 
+            bbox_dimensions.first, bbox_dimensions.second, 
+            bbox_dimensions.first * bbox_dimensions.second, feature_cloud->size());
     }
     
 

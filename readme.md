@@ -7,6 +7,7 @@
     
     3. others：运行过程中缺少什么安装什么即可
 
+
 ## package overview
 
     1. ascamera：官方相机包，发布rgb，depth，pointcloud
@@ -23,6 +24,8 @@
 ## usage：
  
     1. 完整部署：运行bring_up包，带起ascamera, pointcloud_correct, feature_extraction，plc_communication四个节点
+
+    2.http://localhost:8080:访问图像
 
 ## notice：
     

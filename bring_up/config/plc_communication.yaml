@@ -1,8 +1,8 @@
 plc_communication_node:
   ros__parameters:
-    plc_ip: "192.168.2.1"          # PLC的IP地址
+    plc_ip: "192.168.89.149"          # PLC的IP地址
     plc_rack: 0                    # 机架号
-    plc_slot: 1                    # 槽号
+    plc_slot: 2                    # 槽号
     
     db_number: 1                   # 数据块编号
     data_offset_height: 700        # 数据偏移地址（字节） 

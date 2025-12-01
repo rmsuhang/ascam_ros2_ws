@@ -51,7 +51,7 @@ rclcpp_components_register_node(${PROJECT_NAME}
   EXECUTABLE ${PROJECT_NAME}_node
 )
 
-# # 这个标志会构建GDB和valgrind可以读取的调试符号
+# 构建GDB和valgrind可以读取的调试符号
 add_compile_options(-g)
 
 # 测试部分（可选）

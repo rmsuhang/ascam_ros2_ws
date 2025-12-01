@@ -20,7 +20,7 @@ def generate_launch_description():
         parameters=[
             {"usb_bus_no": -1},
             {"usb_path": "null"},
-            {"confiPath": "/home/tanwei-nuc/ascam_ros2_ws/src/ascamera/configurationfiles"},
+            {"confiPath": "/home/project/ascam_ros2_ws/src/ascamera/configurationfiles"},
             {"color_pcl": False},
             {"pub_tfTree": True},
             {"depth_width": 640},
@@ -79,10 +79,24 @@ def generate_launch_description():
         parameters=[plc_communication_config],
         arguments=['--ros-args', '--log-level', 'info']
     )
+
+    web_transport_node= Node(
+            package='web_image_publish',
+            executable='video_stream_server',
+            name='video_stream_server',
+            output='screen',
+            parameters=[{
+                'image_topic': '/ascamera_hp60c/camera_publisher/rgb0/image',
+                'port': 8080,
+                'frame_rate': 30,
+                'jpeg_quality': 80,
+                'thread_count': 4
+            }]
+        )
     
-    # 立即启动相机节点
+    # 立即启动相机节点和图传节点
     ld.add_action(ascamera_node)
-    
+
     # 延迟5秒后启动点云校正节点
     ld.add_action(TimerAction(
         period=5.0,  
@@ -99,6 +113,12 @@ def generate_launch_description():
     ld.add_action(TimerAction(
         period=10.0,  
         actions=[plc_communication_node]
+    ))
+
+    #延迟15秒后启动PLC通信节点
+    ld.add_action(TimerAction(
+        period=15.0,  
+        actions=[web_transport_node]
     ))
     
     return ld

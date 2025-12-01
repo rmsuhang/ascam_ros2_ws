@@ -24,7 +24,7 @@ find_package(std_msgs REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(image_transport REQUIRED)
 find_package(Boost REQUIRED COMPONENTS system thread)
-find_package(ASIO REQUIRED)
+# find_package(ASIO REQUIRED)
 
 
 

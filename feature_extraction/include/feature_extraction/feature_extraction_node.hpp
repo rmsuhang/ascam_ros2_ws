@@ -31,7 +31,12 @@ private:
     double calculateTopHeightAverage(const std::vector<double>& height_differences); 
     double calculateFeatureArea(const pcl::PointCloud<pcl::PointXYZI>::Ptr feature_cloud);
     double calculateBoundingBoxArea(const pcl::PointCloud<pcl::PointXYZI>::Ptr feature_cloud);
-    std::pair<double, double> calculateBoundingBoxDimensions(const pcl::PointCloud<pcl::PointXYZI>::Ptr feature_cloud);//计算两个方向的直径
+
+    std::pair<double, double> calculateBoundingBoxDimensions(const pcl::PointCloud<pcl::PointXYZI>::Ptr feature_cloud);
+    std::pair<double, double> calculateBoundingBoxDimensionsOptimized(const pcl::PointCloud<pcl::PointXYZI>::Ptr feature_cloud);//计算两个方向的直径
+    // 辅助函数：计算点到直线的距离（返回绝对值）
+    float calculatePointToLineDistance(const Eigen::Vector2f& point, const Eigen::Vector2f& line_start, const Eigen::Vector2f& line_end);
+    
 
     // ROS2
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_sub_;

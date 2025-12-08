@@ -20,6 +20,10 @@
 #include <pcl/filters/statistical_outlier_removal.h>
 #include <pcl/common/common.h>
 #include <pcl/search/kdtree.h>
+#include <pcl/surface/convex_hull.h>
+
+// Eigen
+#include <Eigen/Core>
 
 // Project
 #include "feature_extraction/feature_extraction_node.hpp"
@@ -177,7 +181,7 @@ void FeatureExtractionNode::extractFeatures(const sensor_msgs::msg::PointCloud2:
     }
 
     // 4. 计算特征点的边界框尺寸
-    auto bbox_dimensions = calculateBoundingBoxDimensions(feature_cloud);
+    auto bbox_dimensions = calculateBoundingBoxDimensionsOptimized(feature_cloud);
 
     // 5. 发布特征点云
     if (!feature_cloud->empty()) {
@@ -221,6 +225,129 @@ void FeatureExtractionNode::extractFeatures(const sensor_msgs::msg::PointCloud2:
     }
 }
 
+std::pair<double, double> FeatureExtractionNode::calculateBoundingBoxDimensionsOptimized(
+    const pcl::PointCloud<pcl::PointXYZI>::Ptr feature_cloud)
+{
+    if (feature_cloud->size() < min_area_points_) {
+        return std::make_pair(0.0, 0.0);
+    }
+    
+    try {
+        // 1. 复制点云并按X坐标排序
+        std::vector<pcl::PointXYZI> sorted_points(feature_cloud->begin(), feature_cloud->end());
+        std::sort(sorted_points.begin(), sorted_points.end(),
+            [](const pcl::PointXYZI& a, const pcl::PointXYZI& b) {
+                return a.x < b.x;  // Y从小到大排序
+            });
+        
+        // 2. 确定X轴范围
+        float x_min = sorted_points.front().x;
+        float x_max = sorted_points.back().x;
+        float x_range = x_max - x_min;
+        
+        if (x_range < 1e-6) {
+            return std::make_pair(0.0, 0.0);
+        }
+        
+        // 3. 将X范围等分成N个区间
+        const int N = 10;
+        double max_width = 0.0;
+        Eigen::Vector2f left_pt, right_pt;
+        
+        // 预计算每个区间的Y边界
+        std::vector<float> slice_boundaries(N + 1);
+        for (int i = 0; i <= N; ++i) {
+            slice_boundaries[i] = x_min + i * x_range / N;
+        }
+        
+        // 4. 遍历每个区间
+        for (int i = 0; i < N; ++i) {
+            float slice_x_min = slice_boundaries[i];
+            float slice_x_max = slice_boundaries[i + 1];
+            
+            // 使用二分查找快速找到区间内的点
+            auto lower = std::lower_bound(sorted_points.begin(), sorted_points.end(), 
+                slice_x_min, [](const pcl::PointXYZI& p, float x) { return p.x < x; });
+            auto upper = std::upper_bound(sorted_points.begin(), sorted_points.end(), 
+                slice_x_max, [](float x, const pcl::PointXYZI& p) { return x < p.x; });
+            
+            // 如果区间内有点，计算Y范围
+            if (lower != upper) {
+                float min_y = std::numeric_limits<float>::max();
+                float max_y = -std::numeric_limits<float>::max();
+                Eigen::Vector2f current_left_pt, current_right_pt;
+                
+                for (auto it = lower; it != upper; ++it) {
+                    if (it->y < min_y) {
+                        min_y = it->y;
+                        current_left_pt = Eigen::Vector2f(it->x, it->y);
+                    }
+                    if (it->y > max_y) {
+                        max_y = it->y;
+                        current_right_pt = Eigen::Vector2f(it->x, it->y);
+                    }
+                }
+                
+                float width = max_y - min_y;
+                if (width > max_width) {
+                    max_width = width;
+                    left_pt = current_left_pt;
+                    right_pt = current_right_pt;
+                }
+            }
+        }
+        
+        if (max_width < 1e-6) {
+            return std::make_pair(0.0, 0.0);
+        }
+        
+        // 5. 寻找最下面的点（已经排序，最后一个点就是X最大的）
+        Eigen::Vector2f bottom_point(sorted_points.back().x, sorted_points.back().y);
+        
+        // 6. 计算短直径
+        float short_radius = calculatePointToLineDistance(bottom_point, left_pt, right_pt);
+        double short_diameter = short_radius * 2.0;
+        
+        return std::make_pair(max_width, short_diameter);
+        
+    } catch (const std::exception& e) {
+        RCLCPP_ERROR(this->get_logger(), "Error: %s", e.what());
+        return std::make_pair(0.0, 0.0);
+    }
+}
+
+
+// 辅助函数：计算点到直线的距离（返回绝对值）
+float FeatureExtractionNode::calculatePointToLineDistance(
+    const Eigen::Vector2f& point, 
+    const Eigen::Vector2f& line_start, 
+    const Eigen::Vector2f& line_end)
+{
+    // 向量AB
+    Eigen::Vector2f ab = line_end - line_start;
+    // 向量AP
+    Eigen::Vector2f ap = point - line_start;
+    
+    // 计算投影长度
+    float proj_length = ap.dot(ab) / ab.dot(ab);
+    
+    // 计算垂足坐标
+    Eigen::Vector2f projection;
+    if (proj_length <= 0.0f) {
+        projection = line_start;
+    } else if (proj_length >= 1.0f) {
+        projection = line_end;
+    } else {
+        projection = line_start + proj_length * ab;
+    }
+    
+    // 返回点到垂足的距离（绝对值）
+    float distance = (point - projection).norm();
+    
+    // 确保距离为正数
+    return std::abs(distance);
+}
+
 std::pair<double, double> FeatureExtractionNode::calculateBoundingBoxDimensions(
     const pcl::PointCloud<pcl::PointXYZI>::Ptr feature_cloud)
 {
@@ -246,24 +373,24 @@ std::pair<double, double> FeatureExtractionNode::calculateBoundingBoxDimensions(
 }
 
 
-double FeatureExtractionNode::calculateBoundingBoxArea(const pcl::PointCloud<pcl::PointXYZI>::Ptr feature_cloud)
-{
-    // 方法2: 计算边界框面积（简单但不够准确）
-    pcl::PointXYZI min_pt, max_pt;
+// double FeatureExtractionNode::calculateBoundingBoxArea(const pcl::PointCloud<pcl::PointXYZI>::Ptr feature_cloud)
+// {
+//     // 方法2: 计算边界框面积（简单但不够准确）
+//     pcl::PointXYZI min_pt, max_pt;
     
-    // 使用正确的模板特化
-    pcl::getMinMax3D<pcl::PointXYZI>(*feature_cloud, min_pt, max_pt);
+//     // 使用正确的模板特化
+//     pcl::getMinMax3D<pcl::PointXYZI>(*feature_cloud, min_pt, max_pt);
     
-    double width = max_pt.x - min_pt.x;
-    double height = max_pt.y - min_pt.y;
-    double bbox_area = width * height;
+//     double width = max_pt.x - min_pt.x;
+//     double height = max_pt.y - min_pt.y;
+//     double bbox_area = width * height;
     
-    RCLCPP_DEBUG(this->get_logger(), 
-                "Bounding box area: %.6f m² (%.3f x %.3f m)", 
-                bbox_area, width, height);
+//     RCLCPP_DEBUG(this->get_logger(), 
+//                 "Bounding box area: %.6f m² (%.3f x %.3f m)", 
+//                 bbox_area, width, height);
     
-    return bbox_area;
-}
+//     return bbox_area;
+// }
 
 double FeatureExtractionNode::calculateTopHeightAverage(const std::vector<double>& height_differences)
 {

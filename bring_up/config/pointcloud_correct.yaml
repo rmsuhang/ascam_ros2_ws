@@ -3,7 +3,7 @@ pointcloud_correct_node:
     target_frame: "ascamera_hp60c_camera_link_0_corrected"
     source_frame: "ascamera_hp60c_camera_link_0"
     pitch_angle: 0.0
-    roll_angle: 0.80 #相机俯角
+    roll_angle: 0.85 #相机俯角
     yaw_angle: 0.0
     timestamp_offset: 0.0
     use_pcl_transform: true      # 启用PCL优化变换

@@ -12,7 +12,7 @@ feature_extraction_node:
     voxel_leaf_size: 0.005             
     statistical_mean_k: 20             
     statistical_stddev_mult: 1.0       
-    top_percentage: 50.0             
+    top_percentage: 5.0             
     min_area_points: 100.0
 
 

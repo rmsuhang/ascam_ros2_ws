@@ -15,7 +15,6 @@ endif()
 list(APPEND CMAKE_MODULE_PATH "/opt/ros/humble/share/asio_cmake_module/cmake/Modules")
 
 # 查找 ament_cmake_auto
-find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
 find_package(ament_cmake_auto REQUIRED)
 find_package(OpenCV REQUIRED)

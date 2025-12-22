@@ -68,7 +68,7 @@ void HttpServer::start_accept() {
     auto socket = std::make_shared<tcp::socket>(io_context_);
     
     acceptor_.async_accept(*socket,
-        [this, socket](const asio::error_code& error) {
+        [this, socket](const asio::error_code& error) {//捕获this和socket，捕获this是为了调用类的成员函数，捕获socket是为了在回调中使用它
             handle_accept(socket, error);
         });
 }

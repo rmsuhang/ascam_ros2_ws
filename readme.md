@@ -4,8 +4,10 @@
     1. ros2 humble：提供项目框架
 
     2. sanp7：plc通信部分
+
+    3. boost库的asio库：用于多线程处理图像传输工作
     
-    3. others：运行过程中缺少什么安装什么即可
+    4. others：运行过程中缺少什么安装什么即可
 
 
 ## package overview
@@ -18,7 +20,9 @@
 
     4. plc_communication：plc通信节点，订阅塌落度和延展度数据，发送给plc
 
-    5. bring_up：整个项目的launch文件，集合了各个节点的config，负责顺序启动各个节点
+    5. web_image_publish：图像传输节点
+
+    6. bring_up：整个项目的launch文件，集合了各个节点的config，负责顺序启动各个节点
 
 
 ## usage：

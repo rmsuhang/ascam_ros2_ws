@@ -5,7 +5,7 @@
 
 feature_extraction_node:
   ros__parameters:
-    reference_plane_distance: 0.305  #real
+    reference_plane_distance: 0.32  #real
     feature_threshold: 0.005 
     min_feature_height: 0.0         
     max_feature_height: 0.1
@@ -14,6 +14,16 @@ feature_extraction_node:
     statistical_stddev_mult: 1.0       
     top_percentage: 5.0             
     min_area_points: 100.0
+
+    # ROI区域参数
+    use_roi : true        
+    roi_length_ratio: 0.75       
+    roi_width_ratio: 0.75
+    roi_center_x: 0.0
+    roi_center_y: 0.0
+    roi_max_range_x: 1.0
+    roi_max_range_y: 1.0
+
 
 
 

@@ -18,7 +18,7 @@ def generate_launch_description():
             output='screen',
             parameters=[config_file],
             # 优化节点资源分配
-            ros_arguments=['--log-level', 'info'],
+            ros_arguments=['--log-level', 'debug'],
             emulate_tty=True,
         )
     ])

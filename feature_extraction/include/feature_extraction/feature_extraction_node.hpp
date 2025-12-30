@@ -36,6 +36,11 @@ private:
     std::pair<double, double> calculateBoundingBoxDimensionsOptimized(const pcl::PointCloud<pcl::PointXYZI>::Ptr feature_cloud);//计算两个方向的直径
     // 辅助函数：计算点到直线的距离（返回绝对值）
     float calculatePointToLineDistance(const Eigen::Vector2f& point, const Eigen::Vector2f& line_start, const Eigen::Vector2f& line_end);
+    void publishROIMarker();
+
+
+    void applyROIFilter(const pcl::PointCloud<pcl::PointXYZ>::Ptr& input_cloud,
+                                                pcl::PointCloud<pcl::PointXYZ>::Ptr& output_cloud);
     
 
     // ROS2
@@ -45,6 +50,7 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr height_map_pub_;
     rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr height_stats_pub_; 
     rclcpp::Publisher<geometry_msgs::msg::Vector3>::SharedPtr bbox_size_pub_;
+    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr roi_marker_pub_;
     
     // 参数
     double reference_plane_distance_;
@@ -56,6 +62,22 @@ private:
     double statistical_stddev_mult_;
     double top_percentage_;  
     double min_area_points_;
+
+    // ROI参数
+    bool use_roi_;
+    double roi_length_ratio_;
+    double roi_width_ratio_;
+    double roi_center_x_;
+    double roi_center_y_;
+    double roi_max_range_x_;
+    double roi_max_range_y_;
+
+    double roi_min_x_ ;
+    double roi_max_x_ ;
+    double roi_min_y_ ;
+    double roi_max_y_ ;
+    double roi_center_z_;
+    
     
     // 预分配对象
     pcl::PointCloud<pcl::PointXYZ>::Ptr processed_cloud_;

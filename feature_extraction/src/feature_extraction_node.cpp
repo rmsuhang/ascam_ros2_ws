@@ -185,7 +185,7 @@ void FeatureExtractionNode::extractFeatures(const sensor_msgs::msg::PointCloud2:
 
     for (const auto& point : inlier_cloud->points) {
         // 计算相对于参考平面的高度
-        double height_difference = std::abs(reference_plane_distance_ - point.z);
+        double height_difference = (reference_plane_distance_ - point.z);
         
         // 检查是否超过特征阈值
         if (height_difference > feature_threshold_ && 
@@ -328,7 +328,7 @@ void FeatureExtractionNode::publishROIMarker()
 {
     // 创建ROI区域可视化标记
     visualization_msgs::msg::Marker marker;
-    marker.header.frame_id = "ascamera_hp60c_camera_link_0_corrected";
+    marker.header.frame_id = "ascamera_hp60c_camera_link_0";
     marker.header.stamp = this->now();
     marker.ns = "roi_region";
     marker.id = 0;

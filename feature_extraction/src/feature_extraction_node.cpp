@@ -11,6 +11,13 @@
 #include <geometry_msgs/msg/point.hpp>
 #include <std_msgs/msg/color_rgba.hpp>
 
+// Visualization
+#include <visualization_msgs/msg/marker.hpp>
+#include <visualization_msgs/msg/marker_array.hpp>
+
+// CvBridge
+#include <cv_bridge/cv_bridge.h>
+
 // PCL
 #include <pcl_conversions/pcl_conversions.h>
 #include <pcl/point_cloud.h>
@@ -22,6 +29,10 @@
 #include <pcl/common/common.h>
 #include <pcl/search/kdtree.h>
 #include <pcl/surface/convex_hull.h>
+
+// OpenCV
+#include <opencv2/opencv.hpp> 
+#include <opencv2/imgproc.hpp>
 
 // Eigen
 #include <Eigen/Core>
@@ -48,6 +59,14 @@ FeatureExtractionNode::FeatureExtractionNode(const rclcpp::NodeOptions & options
     this->declare_parameter<double>("statistical_stddev_mult", 1.0);  // 统计滤波标准差倍数
     this->declare_parameter<double>("top_percentage", 20.0);          // 统计前百分之多少的高度差
     this->declare_parameter<double>("min_area_points", 100.0);         // 计算面积所需的最小点数
+
+    //图像处理参数
+    this->declare_parameter<float>("image_resolution", 0.01f);
+    this->declare_parameter<float>("morphology_kernel_size", 0.05f);
+    this->declare_parameter<int>("dilation_iterations", 1);
+    this->declare_parameter<int>("erosion_iterations", 1);
+    this->declare_parameter<bool>("use_dilation_first", true);
+    this->declare_parameter<bool>("debug_display_image", true);
     
     // ROI区域参数
     this->declare_parameter<bool>("use_roi", true);                   // 是否使用ROI区域
@@ -69,6 +88,14 @@ FeatureExtractionNode::FeatureExtractionNode(const rclcpp::NodeOptions & options
     top_percentage_ = this->get_parameter("top_percentage").as_double();
     min_area_points_ = this->get_parameter("min_area_points").as_double();
     
+    // 获取图像处理参数
+    image_resolution_ = this->get_parameter("image_resolution").as_double();
+    morphology_kernel_size_ = this->get_parameter("morphology_kernel_size").as_double();
+    dilation_iterations_ = this->get_parameter("dilation_iterations").as_int();
+    erosion_iterations_ = this->get_parameter("erosion_iterations").as_int();
+    use_dilation_first_ = this->get_parameter("use_dilation_first").as_bool();
+    debug_display_image_ = this->get_parameter("debug_display_image").as_bool();
+
     // 获取ROI参数
     use_roi_ = this->get_parameter("use_roi").as_bool();
     roi_length_ratio_ = this->get_parameter("roi_length_ratio").as_double();
@@ -113,6 +140,17 @@ FeatureExtractionNode::FeatureExtractionNode(const rclcpp::NodeOptions & options
     roi_marker_pub_ = this->create_publisher<visualization_msgs::msg::Marker>(
         "/features/roi_marker", 
         rclcpp::QoS(rclcpp::KeepLast(10)));
+
+    // 二值图像发布器
+    binary_image_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
+        "/features/binary_image", 
+        rclcpp::QoS(rclcpp::KeepLast(10)));
+
+    //xoy
+    cloud_xoy_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
+        "/features/cloud_xoy", 
+        rclcpp::QoS(rclcpp::KeepLast(10)));
+
 
     RCLCPP_INFO(this->get_logger(), 
                 "Feature extraction node initialized with reference plane distance: %.3f m", 
@@ -177,6 +215,7 @@ void FeatureExtractionNode::extractFeatures(const sensor_msgs::msg::PointCloud2:
     sor_filter.setMeanK(statistical_mean_k_);
     sor_filter.setStddevMulThresh(statistical_stddev_mult_);
     sor_filter.filter(*inlier_cloud);
+
     
     // 3. 计算高度差并提取特征点
     pcl::PointCloud<pcl::PointXYZI>::Ptr feature_cloud(new pcl::PointCloud<pcl::PointXYZI>);
@@ -185,7 +224,7 @@ void FeatureExtractionNode::extractFeatures(const sensor_msgs::msg::PointCloud2:
 
     for (const auto& point : inlier_cloud->points) {
         // 计算相对于参考平面的高度
-        double height_difference = (reference_plane_distance_ - point.z);
+        double height_difference = std::abs(reference_plane_distance_ - point.z);
         
         // 检查是否超过特征阈值
         if (height_difference > feature_threshold_ && 
@@ -209,7 +248,8 @@ void FeatureExtractionNode::extractFeatures(const sensor_msgs::msg::PointCloud2:
     }
 
     // 4. 计算特征点的边界框尺寸
-    auto bbox_dimensions = calculateBoundingBoxDimensionsOptimized(feature_cloud);
+    //auto bbox_dimensions = calculateBoundingBoxDimensionsOptimized(feature_cloud);
+    auto bbox_dimensions = calculateBoundingBoxWithMorphology(feature_cloud);
 
     // 5. 发布特征点云
     if (!feature_cloud->empty()) {
@@ -253,9 +293,8 @@ void FeatureExtractionNode::extractFeatures(const sensor_msgs::msg::PointCloud2:
     }
 }
 
-void FeatureExtractionNode::applyROIFilter(
-    const pcl::PointCloud<pcl::PointXYZ>::Ptr& input_cloud,
-    pcl::PointCloud<pcl::PointXYZ>::Ptr& output_cloud)
+// 应用ROI区域滤波
+void FeatureExtractionNode::applyROIFilter(const pcl::PointCloud<pcl::PointXYZ>::Ptr& input_cloud, pcl::PointCloud<pcl::PointXYZ>::Ptr& output_cloud)
 {
     // 如果输入点云为空，直接返回
     if (input_cloud->empty()) {
@@ -370,70 +409,346 @@ void FeatureExtractionNode::publishROIMarker()
                 center_x, center_y, roi_center_z_, length_x, length_y, 0.05);
 }
 
-std::pair<double, double> FeatureExtractionNode::calculateBoundingBoxDimensionsOptimized(
-    const pcl::PointCloud<pcl::PointXYZI>::Ptr feature_cloud)
+// 将点云投影到XOY平面
+void FeatureExtractionNode::proj_xoy(const pcl::PointCloud<pcl::PointXYZI>::Ptr input_cloud,pcl::PointCloud<pcl::PointXYZI>::Ptr projection)
+{
+    // 投影到XOY平面（将Z坐标设为0）
+    projection->clear();
+    for (const auto& point : input_cloud->points) {
+        pcl::PointXYZI proj_point;
+        proj_point.x = point.x;
+        proj_point.y = point.y;
+        proj_point.z = 0.0;  // 投影到XOY平面，Z=0
+        proj_point.intensity = point.intensity;
+        projection->points.push_back(proj_point);
+    }
+    projection->width = projection->points.size();
+    projection->height = 1;
+    projection->is_dense = true;
+}
+
+// 使用形态学方法稳定水泥特征区域
+std::pair<double, double> FeatureExtractionNode::calculateBoundingBoxWithMorphology(const pcl::PointCloud<pcl::PointXYZI>::Ptr feature_cloud)
+{
+    if (feature_cloud->empty()) {
+        return std::make_pair(0.0, 0.0);
+    }
+    
+    try {
+
+        // 首先将特征点云投影到XOY平面
+        pcl::PointCloud<pcl::PointXYZI>::Ptr projected_cloud(new pcl::PointCloud<pcl::PointXYZI>);
+        proj_xoy(feature_cloud, projected_cloud);
+
+        //发布xoy点云
+        sensor_msgs::msg::PointCloud2 cloud_xoy_msg;
+        pcl::toROSMsg(*projected_cloud, cloud_xoy_msg);
+        cloud_xoy_msg.header.frame_id = "ascamera_hp60c_camera_link_0";
+        cloud_xoy_msg.header.stamp = this->now();
+        cloud_xoy_pub_->publish(cloud_xoy_msg);
+
+        // 1. 计算点云的边界
+        pcl::PointXYZI min_pt, max_pt;
+        pcl::getMinMax3D(*projected_cloud, min_pt, max_pt);
+        
+        float x_range = max_pt.x - min_pt.x;
+        float y_range = max_pt.y - min_pt.y;
+        
+        // 2. 设置图像参数 - 使用固定尺寸，而不是根据分辨率计算
+        int width = 250;  // 图像宽度，与参考代码一致
+        int height = 50;  // 图像高度，可以根据需要调整
+        
+        // 3. 创建二值图像
+        cv::Mat binary_image = cv::Mat::zeros(height, width, CV_8UC1);
+
+        // 4. 将点云投影到图像上（使用归一化方法，与参考代码一致）
+        for (const auto& point : feature_cloud->points) {
+            // 将点云的x坐标映射到图像宽度（列）
+            int img_x = static_cast<int>((point.x - min_pt.x) / x_range * (width - 1));
+            
+            // 将点云的y坐标映射到图像高度（行）
+            // 注意：点云的y对应图像的x轴，点云的z对应图像的y轴
+            // 但我们的特征点云主要是XY平面，所以这里使用x坐标映射到图像高度
+            int img_y = static_cast<int>((point.y - min_pt.y) / y_range * (height - 1));
+            
+            // 确保坐标在图像范围内
+            if (img_x >= 0 && img_x < width && img_y >= 0 && img_y < height) {
+                binary_image.at<uchar>(img_y, img_x) = 255;
+            }
+        }
+          
+        // 5. 形态学操作：先膨胀后腐蚀（闭操作），使特征更连续
+        // 使用固定核大小，而不是根据分辨率计算
+        int kernel_size = 5;  // 固定核大小
+        if (kernel_size % 2 == 0) kernel_size++;  // 确保核大小为奇数
+        
+        cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, 
+                                                   cv::Size(kernel_size, kernel_size));
+        
+        cv::Mat processed_image;
+        
+        if (use_dilation_first_) {
+            // 先膨胀（连接离散点）后腐蚀（恢复大致形状）
+            cv::dilate(binary_image, processed_image, kernel, cv::Point(-1,-1), dilation_iterations_);
+            cv::erode(processed_image, processed_image, kernel, cv::Point(-1,-1), erosion_iterations_);
+        } else {
+            // 先腐蚀（去除噪声）后膨胀（恢复大小）
+            cv::erode(binary_image, processed_image, kernel, cv::Point(-1,-1), erosion_iterations_);
+            cv::dilate(processed_image, processed_image, kernel, cv::Point(-1,-1), dilation_iterations_);
+        }
+        
+        // 6. 可选：显示图像（用于调试）
+        if (debug_display_image_) {
+            // // 使用cv_bridge发布图像，与参考代码一致
+            // std_msgs::msg::Header header;
+            // header.frame_id = "ascamera_hp60c_camera_link_0";
+            // header.stamp = this->now();
+            
+            // // 发布二值图像
+            // sensor_msgs::msg::Image::SharedPtr binary_msg = 
+            //     cv_bridge::CvImage(header, "mono8", binary_image).toImageMsg();
+            // binary_image_pub_->publish(*binary_msg);
+            publishBinaryImage(processed_image, 
+                               "ascamera_hp60c_camera_link_0", 
+                               this->now(), 
+                               "binary_image");
+        }
+        
+        // 8. 从处理后的图像中计算边界框尺寸
+        // 注意：现在需要将图像坐标转换回点云坐标
+        // 分辨率 = 实际范围 / 图像尺寸
+        float x_resolution = x_range / width;    // 每个像素在x方向的米数
+        float y_resolution = y_range / height;   // 每个像素在y方向的米数
+        
+        return calculateBoundingBoxFromImage(processed_image, min_pt.x, max_pt.y, x_resolution, y_resolution);
+        
+    } catch (const std::exception& e) {
+        RCLCPP_ERROR(this->get_logger(), "Error in calculateBoundingBoxWithMorphology: %s", e.what());
+        return std::make_pair(0.0, 0.0);
+    }
+}
+
+// 从二值图像中计算边界框尺寸（根据分辨率反算）
+std::pair<double, double> FeatureExtractionNode::calculateBoundingBoxFromImage(const cv::Mat& binary_image, float min_x, float max_y, float x_resolution, float y_resolution)
+{
+    if (binary_image.empty() || cv::countNonZero(binary_image) == 0) {
+        return std::make_pair(0.0, 0.0);
+    }
+    
+    try {
+        int width = binary_image.cols;
+        int height = binary_image.rows;
+        
+        // 1. 将y方向分成N个区间（类似于原始算法）
+        const int N = 100;
+        double max_width = 0.0;
+        cv::Point left_pt_pixel(-1, -1), right_pt_pixel(-1, -1);
+        
+        // 计算每个区间的y边界（像素行号）
+        std::vector<int> slice_boundaries(N + 1);
+        for (int i = 0; i <= N; ++i) {
+            slice_boundaries[i] = i * height / N;
+        }
+        
+        // 2. 遍历每个区间，找到x方向最宽的位置
+        for (int i = 0; i < N; ++i) {
+            int slice_v_min = slice_boundaries[i];
+            int slice_v_max = slice_boundaries[i + 1];
+            
+            // 在这个区间内统计x范围
+            int min_u = INT_MAX;
+            int max_u = -1;
+            cv::Point current_left_pt(-1, -1), current_right_pt(-1, -1);
+            
+            for (int v = slice_v_min; v < slice_v_max; v++) {
+                int row_min_u = INT_MAX;
+                int row_max_u = -1;
+                cv::Point row_left_pt(-1, -1), row_right_pt(-1, -1);
+                
+                // 扫描这一行
+                for (int u = 0; u < width; u++) {
+                    if (binary_image.at<uchar>(v, u) > 0) {
+                        if (u < row_min_u) {
+                            row_min_u = u;
+                            row_left_pt = cv::Point(u, v);
+                        }
+                        if (u > row_max_u) {
+                            row_max_u = u;
+                            row_right_pt = cv::Point(u, v);
+                        }
+                    }
+                }
+                
+                // 更新整个区间的x范围
+                if (row_min_u < min_u) {
+                    min_u = row_min_u;
+                    current_left_pt = row_left_pt;
+                }
+                if (row_max_u > max_u) {
+                    max_u = row_max_u;
+                    current_right_pt = row_right_pt;
+                }
+            }
+            
+            // 计算这个区间的宽度
+            if (min_u <= max_u) {
+                int width_pixels = max_u - min_u + 1;
+                
+                if (width_pixels > max_width) {
+                    max_width = width_pixels;
+                    left_pt_pixel = current_left_pt;
+                    right_pt_pixel = current_right_pt;
+                }
+            }
+        }
+        
+        if (max_width < 1e-6) {
+            return std::make_pair(0.0, 0.0);
+        }
+        
+        // 3. 寻找最下面的点（y最小的点，对应图像中行号最大的点）
+        cv::Point bottom_pt_pixel(-1, -1);
+        for (int v = height - 1; v >= 0; v--) {
+            for (int u = 0; u < width; u++) {
+                if (binary_image.at<uchar>(v, u) > 0) {
+                    bottom_pt_pixel = cv::Point(u, v);
+                    break;
+                }
+            }
+            if (bottom_pt_pixel.x != -1) break;
+        }
+        
+        if (bottom_pt_pixel.x == -1) {
+            return std::make_pair(0.0, 0.0);
+        }
+        
+        // 4. 计算最下面点到最宽直线的距离（像素单位）
+        // 使用点到直线的距离公式
+        double short_radius_pixels = calculatePointToLineDistancePixel(
+            bottom_pt_pixel, left_pt_pixel, right_pt_pixel);
+        
+        // 5. 转换为实际尺寸
+        double x_length = max_width * x_resolution;
+        double y_diameter = short_radius_pixels * 2.0 * y_resolution;
+        
+        RCLCPP_DEBUG(this->get_logger(),
+                    "Image analysis results - Max width: %.0f px at row %d, Bottom point at row %d",
+                    max_width, left_pt_pixel.y, bottom_pt_pixel.y);
+        
+        RCLCPP_DEBUG(this->get_logger(),
+                    "Real dimensions - Length: %.3f m, Short diameter: %.3f m",
+                    x_length, y_diameter);
+        
+        return std::make_pair(x_length, y_diameter);
+        
+    } catch (const std::exception& e) {
+        RCLCPP_ERROR(this->get_logger(), "Error in calculateBoundingBoxFromImage: %s", e.what());
+        return std::make_pair(0.0, 0.0);
+    }
+}
+
+
+// 发布二值图像
+void FeatureExtractionNode::publishBinaryImage(const cv::Mat& image, const std::string& frame_id,const rclcpp::Time& stamp,const std::string& topic_name)
+{
+    try {
+        // 确保图像不为空
+        if (image.empty()) {
+            RCLCPP_WARN(this->get_logger(), "Cannot publish empty image");
+            return;
+        }
+        
+        // 创建ROS图像消息
+        sensor_msgs::msg::Image ros_image;
+        ros_image.header.stamp = stamp;
+        ros_image.header.frame_id = frame_id;
+        ros_image.height = image.rows;
+        ros_image.width = image.cols;
+        ros_image.encoding = "mono8";  // 二值图像使用mono8编码
+        ros_image.is_bigendian = false;
+        ros_image.step = image.cols * sizeof(uint8_t);  // 单通道图像
+        
+        // 复制图像数据
+        size_t data_size = image.rows * image.cols * sizeof(uint8_t);
+        ros_image.data.resize(data_size);
+        memcpy(ros_image.data.data(), image.data, data_size);
+        
+        // 发布到相应的话题
+        binary_image_pub_->publish(ros_image);
+
+        RCLCPP_DEBUG(this->get_logger(), "Published %s: %dx%d pixels", 
+                    topic_name.c_str(), image.cols, image.rows);
+        
+    } catch (const std::exception& e) {
+        RCLCPP_ERROR(this->get_logger(), "Error publishing image: %s", e.what());
+    }
+}
+
+
+// 优化后的边界框尺寸计算方法（水泥特征区域不稳定）
+std::pair<double, double> FeatureExtractionNode::calculateBoundingBoxDimensionsOptimized(const pcl::PointCloud<pcl::PointXYZI>::Ptr feature_cloud)
 {
     if (feature_cloud->size() < min_area_points_) {
         return std::make_pair(0.0, 0.0);
     }
     
     try {
-        // 1. 复制点云并按X坐标排序
+        // 1. 复制点云并按Y坐标排序
         std::vector<pcl::PointXYZI> sorted_points(feature_cloud->begin(), feature_cloud->end());
         std::sort(sorted_points.begin(), sorted_points.end(),
             [](const pcl::PointXYZI& a, const pcl::PointXYZI& b) {
-                return a.x < b.x;  // X从小到大排序
+                return a.y< b.y;  // y从小到大排序
             });
         
-        // 2. 确定X轴范围
-        float x_min = sorted_points.front().x;
-        float x_max = sorted_points.back().x;
-        float x_range = x_max - x_min;
+        // 2. 确定y轴范围
+        float y_min = sorted_points.front().y;
+        float y_max = sorted_points.back().y;
+        float y_range = y_max - y_min;
         
-        if (x_range < 1e-6) {
+        if (y_range < 1e-6) {
             return std::make_pair(0.0, 0.0);
         }
         
-        // 3. 将X范围等分成N个区间
-        const int N = 10;
+        // 3. 将y范围等分成N个区间
+        const int N = 100;
         double max_width = 0.0;
         Eigen::Vector2f left_pt, right_pt;
         
         // 预计算每个区间的X边界
         std::vector<float> slice_boundaries(N + 1);
         for (int i = 0; i <= N; ++i) {
-            slice_boundaries[i] = x_min + i * x_range / N;
+            slice_boundaries[i] = y_min + i * y_range / N;
         }
         
         // 4. 遍历每个区间
         for (int i = 0; i < N; ++i) {
-            float slice_x_min = slice_boundaries[i];
-            float slice_x_max = slice_boundaries[i + 1];
+            float slice_y_min = slice_boundaries[i];
+            float slice_y_max = slice_boundaries[i + 1];
             
             // 使用二分查找快速找到区间内的点
             auto lower = std::lower_bound(sorted_points.begin(), sorted_points.end(), 
-                slice_x_min, [](const pcl::PointXYZI& p, float x) { return p.x < x; });
+                slice_y_min, [](const pcl::PointXYZI& p, float y) { return p.y < y; });
             auto upper = std::upper_bound(sorted_points.begin(), sorted_points.end(), 
-                slice_x_max, [](float x, const pcl::PointXYZI& p) { return x < p.x; });
+                slice_y_max, [](float y, const pcl::PointXYZI& p) { return y < p.y; });
             
-            // 如果区间内有点，计算Y范围
+            // 如果区间内有点，计算x范围
             if (lower != upper) {
-                float min_y = std::numeric_limits<float>::max();
-                float max_y = -std::numeric_limits<float>::max();
+                float min_x = std::numeric_limits<float>::max();
+                float max_x = -std::numeric_limits<float>::max();
                 Eigen::Vector2f current_left_pt, current_right_pt;
                 
                 for (auto it = lower; it != upper; ++it) {
-                    if (it->y < min_y) {
-                        min_y = it->y;
+                    if (it->x < min_x) {
+                        min_x = it->x;
                         current_left_pt = Eigen::Vector2f(it->x, it->y);
                     }
-                    if (it->y > max_y) {
-                        max_y = it->y;
+                    if (it->x > max_x) {
+                        max_x = it->x;
                         current_right_pt = Eigen::Vector2f(it->x, it->y);
                     }
                 }
                 
-                float width = max_y - min_y;
+                float width = max_x - min_x;
                 if (width > max_width) {
                     max_width = width;
                     left_pt = current_left_pt;
@@ -446,7 +761,7 @@ std::pair<double, double> FeatureExtractionNode::calculateBoundingBoxDimensionsO
             return std::make_pair(0.0, 0.0);
         }
         
-        // 5. 寻找最下面的点（已经排序，最后一个点就是X最大的）
+        // 5. 寻找最下面的点（已经排序，最后一个点就是y最大的）
         Eigen::Vector2f bottom_point(sorted_points.back().x, sorted_points.back().y);
         
         // 6. 计算短直径
@@ -461,11 +776,9 @@ std::pair<double, double> FeatureExtractionNode::calculateBoundingBoxDimensionsO
     }
 }
 
-// 辅助函数：计算点到直线的距离（返回绝对值）
-float FeatureExtractionNode::calculatePointToLineDistance(
-    const Eigen::Vector2f& point, 
-    const Eigen::Vector2f& line_start, 
-    const Eigen::Vector2f& line_end)
+
+// 辅助函数1：计算点到直线的距离（返回绝对值）
+float FeatureExtractionNode::calculatePointToLineDistance(const Eigen::Vector2f& point, const Eigen::Vector2f& line_start, const Eigen::Vector2f& line_end)
 {
     // 向量AB
     Eigen::Vector2f ab = line_end - line_start;
@@ -492,8 +805,35 @@ float FeatureExtractionNode::calculatePointToLineDistance(
     return std::abs(distance);
 }
 
-std::pair<double, double> FeatureExtractionNode::calculateBoundingBoxDimensions(
-    const pcl::PointCloud<pcl::PointXYZI>::Ptr feature_cloud)
+
+// 辅助函数2：计算像素坐标系中点到直线的距离
+double FeatureExtractionNode::calculatePointToLineDistancePixel(const cv::Point& point, const cv::Point& line_start, const cv::Point& line_end)
+{
+    // 处理垂直线或水平线的情况
+    if (line_start.x == line_end.x) {
+        // 垂直线
+        return std::abs(point.x - line_start.x);
+    }
+    if (line_start.y == line_end.y) {
+        // 水平线
+        return std::abs(point.y - line_start.y);
+    }
+    
+    // 一般情况：点到直线的距离公式
+    // 直线方程：Ax + By + C = 0
+    double A = line_end.y - line_start.y;
+    double B = line_start.x - line_end.x;
+    double C = line_end.x * line_start.y - line_start.x * line_end.y;
+    
+    // 距离 = |Ax + By + C| / sqrt(A² + B²)
+    double distance = std::abs(A * point.x + B * point.y + C) / std::sqrt(A * A + B * B);
+    
+    return distance;
+}
+
+
+// 基本边界框计算方法
+std::pair<double, double> FeatureExtractionNode::calculateBoundingBoxDimensions(const pcl::PointCloud<pcl::PointXYZI>::Ptr feature_cloud)
 {
     if (feature_cloud->size() < min_area_points_) {
         RCLCPP_DEBUG(this->get_logger(), 
@@ -515,6 +855,100 @@ std::pair<double, double> FeatureExtractionNode::calculateBoundingBoxDimensions(
     
     return std::make_pair(length, width);
 }
+
+
+
+// std::pair<double, double> FeatureExtractionNode::calculateBoundingBoxDimensionsOptimized(
+//     const pcl::PointCloud<pcl::PointXYZI>::Ptr feature_cloud)
+// {
+//     if (feature_cloud->size() < min_area_points_) {
+//         return std::make_pair(0.0, 0.0);
+//     }
+    
+//     try {
+//         // 1. 复制点云并按X坐标排序
+//         std::vector<pcl::PointXYZI> sorted_points(feature_cloud->begin(), feature_cloud->end());
+//         std::sort(sorted_points.begin(), sorted_points.end(),
+//             [](const pcl::PointXYZI& a, const pcl::PointXYZI& b) {
+//                 return a.x < b.x;  // X从小到大排序
+//             });
+        
+//         // 2. 确定X轴范围
+//         float x_min = sorted_points.front().x;
+//         float x_max = sorted_points.back().x;
+//         float x_range = x_max - x_min;
+        
+//         if (x_range < 1e-6) {
+//             return std::make_pair(0.0, 0.0);
+//         }
+        
+//         // 3. 将X范围等分成N个区间
+//         const int N = 50;
+//         double max_width = 0.0;
+//         Eigen::Vector2f left_pt, right_pt;
+        
+//         // 预计算每个区间的X边界
+//         std::vector<float> slice_boundaries(N + 1);
+//         for (int i = 0; i <= N; ++i) {
+//             slice_boundaries[i] = x_min + i * x_range / N;
+//         }
+        
+//         // 4. 遍历每个区间
+//         for (int i = 0; i < N; ++i) {
+//             float slice_x_min = slice_boundaries[i];
+//             float slice_x_max = slice_boundaries[i + 1];
+            
+//             // 使用二分查找快速找到区间内的点
+//             auto lower = std::lower_bound(sorted_points.begin(), sorted_points.end(), 
+//                 slice_x_min, [](const pcl::PointXYZI& p, float x) { return p.x < x; });
+//             auto upper = std::upper_bound(sorted_points.begin(), sorted_points.end(), 
+//                 slice_x_max, [](float x, const pcl::PointXYZI& p) { return x < p.x; });
+            
+//             // 如果区间内有点，计算Y范围
+//             if (lower != upper) {
+//                 float min_y = std::numeric_limits<float>::max();
+//                 float max_y = -std::numeric_limits<float>::max();
+//                 Eigen::Vector2f current_left_pt, current_right_pt;
+                
+//                 for (auto it = lower; it != upper; ++it) {
+//                     if (it->y < min_y) {
+//                         min_y = it->y;
+//                         current_left_pt = Eigen::Vector2f(it->x, it->y);
+//                     }
+//                     if (it->y > max_y) {
+//                         max_y = it->y;
+//                         current_right_pt = Eigen::Vector2f(it->x, it->y);
+//                     }
+//                 }
+                
+//                 float width = max_y - min_y;
+//                 if (width > max_width) {
+//                     max_width = width;
+//                     left_pt = current_left_pt;
+//                     right_pt = current_right_pt;
+//                 }
+//             }
+//         }
+        
+//         if (max_width < 1e-6) {
+//             return std::make_pair(0.0, 0.0);
+//         }
+        
+//         // 5. 寻找最下面的点（已经排序，最后一个点就是X最大的）
+//         Eigen::Vector2f bottom_point(sorted_points.back().x, sorted_points.back().y);
+        
+//         // 6. 计算短直径
+//         float short_radius = calculatePointToLineDistance(bottom_point, left_pt, right_pt);
+//         double short_diameter = short_radius * 2.0;
+        
+//         return std::make_pair(max_width, short_diameter);
+        
+//     } catch (const std::exception& e) {
+//         RCLCPP_ERROR(this->get_logger(), "Error: %s", e.what());
+//         return std::make_pair(0.0, 0.0);
+//     }
+// }
+
 
 double FeatureExtractionNode::calculateTopHeightAverage(const std::vector<double>& height_differences)
 {

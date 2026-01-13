@@ -34,14 +34,30 @@ private:
 
     std::pair<double, double> calculateBoundingBoxDimensions(const pcl::PointCloud<pcl::PointXYZI>::Ptr feature_cloud);
     std::pair<double, double> calculateBoundingBoxDimensionsOptimized(const pcl::PointCloud<pcl::PointXYZI>::Ptr feature_cloud);//计算两个方向的直径
-    // 辅助函数：计算点到直线的距离（返回绝对值）
-    float calculatePointToLineDistance(const Eigen::Vector2f& point, const Eigen::Vector2f& line_start, const Eigen::Vector2f& line_end);
+
+    void applyROIFilter(const pcl::PointCloud<pcl::PointXYZ>::Ptr& input_cloud,pcl::PointCloud<pcl::PointXYZ>::Ptr& output_cloud);
     void publishROIMarker();
+    // 辅助函数1：计算点到直线的距离（返回绝对值）
+    float calculatePointToLineDistance(const Eigen::Vector2f& point, const Eigen::Vector2f& line_start, const Eigen::Vector2f& line_end); 
 
 
-    void applyROIFilter(const pcl::PointCloud<pcl::PointXYZ>::Ptr& input_cloud,
-                                                pcl::PointCloud<pcl::PointXYZ>::Ptr& output_cloud);
+    // 方法声明
+    void proj_xoy(const pcl::PointCloud<pcl::PointXYZI>::Ptr input_cloud,
+                   pcl::PointCloud<pcl::PointXYZI>::Ptr projected_cloud);
+    std::pair<double, double> calculateBoundingBoxWithMorphology(
+        const pcl::PointCloud<pcl::PointXYZI>::Ptr feature_cloud);
     
+    std::pair<double, double> calculateBoundingBoxFromImage(
+        const cv::Mat& binary_image, 
+        float min_x, float max_y, 
+        float x_resolution, float y_resolution);
+
+    void publishBinaryImage(const cv::Mat& image, 
+                                              const std::string& frame_id,
+                                              const rclcpp::Time& stamp,
+                                              const std::string& topic_name);
+    // 辅助函数2：计算点到直线的距离（图像坐标系）                                    
+    double calculatePointToLineDistancePixel(const cv::Point& point, const cv::Point& line_start,const cv::Point& line_end);
 
     // ROS2
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_sub_;
@@ -51,6 +67,17 @@ private:
     rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr height_stats_pub_; 
     rclcpp::Publisher<geometry_msgs::msg::Vector3>::SharedPtr bbox_size_pub_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr roi_marker_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr binary_image_pub_;  
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr cloud_xoy_pub_;
+
+    // 图像处理参数
+    float image_resolution_ = 0.01f;  // 米/像素，默认1cm一个像素
+    float morphology_kernel_size_ = 0.05f;  // 形态学核大小（米）
+    int dilation_iterations_ = 2;
+    int erosion_iterations_ = 2;
+    bool use_dilation_first_ = true;  // true:先膨胀后腐蚀; false:先腐蚀后膨胀
+    bool debug_display_image_ = true;  // 是否显示图像用于调试
+
     
     // 参数
     double reference_plane_distance_;

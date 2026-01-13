@@ -20,6 +20,7 @@ endif()
 
 # 查找 ament_cmake_auto
 find_package(ament_cmake_auto REQUIRED)
+find_package(OpenCV REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)

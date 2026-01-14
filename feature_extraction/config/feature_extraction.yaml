@@ -18,19 +18,20 @@ feature_extraction_node:
     # ROI区域参数
     use_roi : true        
     roi_length_ratio: 0.75
-    roi_width_ratio: 0.5
+    roi_width_ratio: 0.75
     roi_center_x: 0.0
     roi_center_y: 0.0
     roi_max_range_x: 10.0
     roi_max_range_y: 10.0
 
     #图像处理参数
-    image_resolution : 0.01
-    morphology_kernel_size :  0.05
+    image_resolution : 0.005
+    morphology_kernel_size :  5
     dilation_iterations : 1
     erosion_iterations : 1
-    use_dilation_first : true
+    use_dilation_first : false
     debug_display_image : true
+
 
 
 

@@ -26,10 +26,10 @@ feature_extraction_node:
 
 
     #图像处理参数
-    image_resolution : 0.01
-    morphology_kernel_size :  0.05
-    dilation_iterations : 1
-    erosion_iterations : 1
+    image_resolution : 0.005
+    morphology_kernel_size :  5
+    dilation_iterations : 5
+    erosion_iterations : 2
     use_dilation_first : true
     debug_display_image : true
 

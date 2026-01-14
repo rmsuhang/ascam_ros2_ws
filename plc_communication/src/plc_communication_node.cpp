@@ -108,14 +108,14 @@ void PLCCommunicationNode::bboxCallback(const geometry_msgs::msg::Vector3::Share
     }
 
     // 发送宽度数据到PLC
-    if (sendDataToPLC(width_value, data_offset_width_)) {
+    if (sendDataToPLC(length_value, data_offset_width_)) {
         RCLCPP_INFO(this->get_logger(), 
                     "Successfully sent width value %.6f to PLC at offset %d", 
-                    width_value, data_offset_width_);
+                    length_value, data_offset_width_);
     } else {
         RCLCPP_INFO(this->get_logger(), 
                     "Failed to send width value %.6f to PLC at offset %d", 
-                    width_value, data_offset_width_);
+                    length_value, data_offset_width_);
     }
 
 }

@@ -47,10 +47,10 @@ private:
     std::pair<double, double> calculateBoundingBoxWithMorphology(
         const pcl::PointCloud<pcl::PointXYZI>::Ptr feature_cloud);
     
-    std::pair<double, double> calculateBoundingBoxFromImage(
-        const cv::Mat& binary_image, 
-        float min_x, float max_y, 
-        float x_resolution, float y_resolution);
+    // std::pair<double, double> calculateBoundingBoxFromImage(
+    //     const cv::Mat& binary_image, 
+    //     float min_x, float max_y, 
+    //     float x_resolution, float y_resolution);
 
     void publishBinaryImage(const cv::Mat& image, 
                                               const std::string& frame_id,
@@ -58,6 +58,24 @@ private:
                                               const std::string& topic_name);
     // 辅助函数2：计算点到直线的距离（图像坐标系）                                    
     double calculatePointToLineDistancePixel(const cv::Point& point, const cv::Point& line_start,const cv::Point& line_end);
+
+
+    // 图像处理函数
+    std::pair<double, double> calculateBoundingBoxFromImage(
+        const cv::Mat& binary_image, 
+        float min_x, float max_y, 
+        float x_resolution, float y_resolution);
+    
+    // 可视化函数
+    void publishContourAndCircle(
+        const cv::Mat& binary_image,
+        const std::vector<cv::Point>& contour,
+        const cv::Point2f& circle_center,
+        float circle_radius);
+    
+    // ROS发布器
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr visualization_pub_1;
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr visualization_pub_2;
 
     // ROS2
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_sub_;
@@ -70,9 +88,12 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr binary_image_pub_;  
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr cloud_xoy_pub_;
 
+
+    
+
     // 图像处理参数
     float image_resolution_ = 0.01f;  // 米/像素，默认1cm一个像素
-    float morphology_kernel_size_ = 0.05f;  // 形态学核大小（米）
+    int morphology_kernel_size_ = 5;  // 形态学核大小（米）
     int dilation_iterations_ = 2;
     int erosion_iterations_ = 2;
     bool use_dilation_first_ = true;  // true:先膨胀后腐蚀; false:先腐蚀后膨胀

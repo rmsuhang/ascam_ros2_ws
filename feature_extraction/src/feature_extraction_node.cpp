@@ -62,7 +62,7 @@ FeatureExtractionNode::FeatureExtractionNode(const rclcpp::NodeOptions & options
 
     //图像处理参数
     this->declare_parameter<float>("image_resolution", 0.01f);
-    this->declare_parameter<float>("morphology_kernel_size", 0.05f);
+    this->declare_parameter<int>("morphology_kernel_size", 5);
     this->declare_parameter<int>("dilation_iterations", 1);
     this->declare_parameter<int>("erosion_iterations", 1);
     this->declare_parameter<bool>("use_dilation_first", true);
@@ -90,7 +90,7 @@ FeatureExtractionNode::FeatureExtractionNode(const rclcpp::NodeOptions & options
     
     // 获取图像处理参数
     image_resolution_ = this->get_parameter("image_resolution").as_double();
-    morphology_kernel_size_ = this->get_parameter("morphology_kernel_size").as_double();
+    morphology_kernel_size_ = this->get_parameter("morphology_kernel_size").as_int();
     dilation_iterations_ = this->get_parameter("dilation_iterations").as_int();
     erosion_iterations_ = this->get_parameter("erosion_iterations").as_int();
     use_dilation_first_ = this->get_parameter("use_dilation_first").as_bool();
@@ -150,6 +150,14 @@ FeatureExtractionNode::FeatureExtractionNode(const rclcpp::NodeOptions & options
     cloud_xoy_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
         "/features/cloud_xoy", 
         rclcpp::QoS(rclcpp::KeepLast(10)));
+
+    // 创建发布器
+    visualization_pub_1 = this->create_publisher<sensor_msgs::msg::Image>(
+        "/features/process_image", 10);
+
+    // 创建发布器
+    visualization_pub_2 = this->create_publisher<sensor_msgs::msg::Image>(
+        "/features/contour_image", 10);
 
 
     RCLCPP_INFO(this->get_logger(), 
@@ -427,20 +435,121 @@ void FeatureExtractionNode::proj_xoy(const pcl::PointCloud<pcl::PointXYZI>::Ptr 
     projection->is_dense = true;
 }
 
-// 使用形态学方法稳定水泥特征区域
-std::pair<double, double> FeatureExtractionNode::calculateBoundingBoxWithMorphology(const pcl::PointCloud<pcl::PointXYZI>::Ptr feature_cloud)
+// // 使用形态学方法稳定水泥特征区域
+// std::pair<double, double> FeatureExtractionNode::calculateBoundingBoxWithMorphology(const pcl::PointCloud<pcl::PointXYZI>::Ptr feature_cloud)
+// {
+//     if (feature_cloud->empty()) {
+//         return std::make_pair(0.0, 0.0);
+//     }
+    
+//     try {
+
+//         // 首先将特征点云投影到XOY平面
+//         pcl::PointCloud<pcl::PointXYZI>::Ptr projected_cloud(new pcl::PointCloud<pcl::PointXYZI>);
+//         proj_xoy(feature_cloud, projected_cloud);
+
+//         //发布xoy点云
+//         sensor_msgs::msg::PointCloud2 cloud_xoy_msg;
+//         pcl::toROSMsg(*projected_cloud, cloud_xoy_msg);
+//         cloud_xoy_msg.header.frame_id = "ascamera_hp60c_camera_link_0";
+//         cloud_xoy_msg.header.stamp = this->now();
+//         cloud_xoy_pub_->publish(cloud_xoy_msg);
+
+//         // 1. 计算点云的边界
+//         pcl::PointXYZI min_pt, max_pt;
+//         pcl::getMinMax3D(*projected_cloud, min_pt, max_pt);
+        
+//         float x_range = max_pt.x - min_pt.x;
+//         float y_range = max_pt.y - min_pt.y;
+        
+//         // 2. 设置图像参数 - 使用固定尺寸，而不是根据分辨率计算，总共250x50像素
+//         int width = 250;  // 图像宽度，与参考代码一致
+//         int height = 50;  // 图像高度，可以根据需要调整
+        
+//         // 3. 创建二值图像
+//         cv::Mat binary_image = cv::Mat::zeros(height, width, CV_8UC1);
+
+//         // 4. 将点云投影到图像上（使用归一化方法，与参考代码一致）
+//         for (const auto& point : feature_cloud->points) {
+//             // 将点云的x坐标映射到图像宽度（列）
+//             int img_x = static_cast<int>((point.x - min_pt.x) / x_range * (width - 1));
+            
+//             // 将点云的y坐标映射到图像高度（行）
+//             // 注意：点云的y对应图像的x轴，点云的z对应图像的y轴
+//             // 但我们的特征点云主要是XY平面，所以这里使用x坐标映射到图像高度
+//             int img_y = static_cast<int>((point.y - min_pt.y) / y_range * (height - 1));
+            
+//             // 确保坐标在图像范围内
+//             if (img_x >= 0 && img_x < width && img_y >= 0 && img_y < height) {
+//                 binary_image.at<uchar>(img_y, img_x) = 255;
+//             }
+//         }
+          
+//         // 5. 形态学操作：先膨胀后腐蚀（闭操作），使特征更连续
+//         // 使用固定核大小，而不是根据分辨率计算
+//         int kernel_size = 3;  // 固定核大小
+//         if (kernel_size % 2 == 0) kernel_size++;  // 确保核大小为奇数
+        
+//         cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, 
+//                                                    cv::Size(kernel_size, kernel_size));
+        
+//         cv::Mat processed_image;
+        
+//         if (use_dilation_first_) {
+//             // 先膨胀（连接离散点）后腐蚀（恢复大致形状）
+//             cv::dilate(binary_image, processed_image, kernel, cv::Point(-1,-1), dilation_iterations_);
+//             cv::erode(processed_image, processed_image, kernel, cv::Point(-1,-1), erosion_iterations_);
+//         } else {
+//             // 先腐蚀（去除噪声）后膨胀（恢复大小）
+//             cv::erode(binary_image, processed_image, kernel, cv::Point(-1,-1), erosion_iterations_);
+//             cv::dilate(processed_image, processed_image, kernel, cv::Point(-1,-1), dilation_iterations_);
+//         }
+        
+//         // 6. 可选：显示图像（用于调试）
+//         if (debug_display_image_) {
+//             // // 使用cv_bridge发布图像，与参考代码一致
+//             // std_msgs::msg::Header header;
+//             // header.frame_id = "ascamera_hp60c_camera_link_0";
+//             // header.stamp = this->now();
+            
+//             // // 发布二值图像
+//             // sensor_msgs::msg::Image::SharedPtr binary_msg = 
+//             //     cv_bridge::CvImage(header, "mono8", binary_image).toImageMsg();
+//             // binary_image_pub_->publish(*binary_msg);
+//             publishBinaryImage(processed_image, 
+//                                "ascamera_hp60c_camera_link_0", 
+//                                this->now(), 
+//                                "binary_image");
+//         }
+        
+//         // 8. 从处理后的图像中计算边界框尺寸
+//         // 注意：现在需要将图像坐标转换回点云坐标
+//         // 分辨率 = 实际范围 / 图像尺寸
+//         float x_resolution = x_range / width;    // 每个像素在x方向的米数
+//         float y_resolution = y_range / height;   // 每个像素在y方向的米数
+        
+//         return calculateBoundingBoxFromImage(processed_image, min_pt.x, max_pt.y, x_resolution, y_resolution);
+        
+//     } catch (const std::exception& e) {
+//         RCLCPP_ERROR(this->get_logger(), "Error in calculateBoundingBoxWithMorphology: %s", e.what());
+//         return std::make_pair(0.0, 0.0);
+//     }
+// }
+
+
+std::pair<double, double> FeatureExtractionNode::calculateBoundingBoxWithMorphology(
+    const pcl::PointCloud<pcl::PointXYZI>::Ptr feature_cloud)
 {
     if (feature_cloud->empty()) {
         return std::make_pair(0.0, 0.0);
     }
     
     try {
-
         // 首先将特征点云投影到XOY平面
         pcl::PointCloud<pcl::PointXYZI>::Ptr projected_cloud(new pcl::PointCloud<pcl::PointXYZI>);
         proj_xoy(feature_cloud, projected_cloud);
 
-        //发布xoy点云
+        // 发布xoy点云
         sensor_msgs::msg::PointCloud2 cloud_xoy_msg;
         pcl::toROSMsg(*projected_cloud, cloud_xoy_msg);
         cloud_xoy_msg.header.frame_id = "ascamera_hp60c_camera_link_0";
@@ -449,37 +558,94 @@ std::pair<double, double> FeatureExtractionNode::calculateBoundingBoxWithMorphol
 
         // 1. 计算点云的边界
         pcl::PointXYZI min_pt, max_pt;
-        pcl::getMinMax3D(*projected_cloud, min_pt, max_pt);
+        //pcl::getMinMax3D(*projected_cloud, min_pt, max_pt);
         
+        //此处默认全是0,因为不需要用点云坐标计算尺寸
         float x_range = max_pt.x - min_pt.x;
         float y_range = max_pt.y - min_pt.y;
         
-        // 2. 设置图像参数 - 使用固定尺寸，而不是根据分辨率计算
-        int width = 250;  // 图像宽度，与参考代码一致
-        int height = 50;  // 图像高度，可以根据需要调整
+        // 2. 确定分辨率：每个像素代表的实际距离
+        // 根据水泥大小合理设置，假设水泥直径约0.2-0.5米
+        float resolution = image_resolution_;  // 使用参数化的分辨率，默认0.005米/像素
         
-        // 3. 创建二值图像
+        // 3. 确定图像尺寸：设置足够大的固定尺寸
+        // 确保图像尺寸足够大，能容纳水泥加上足够的边界
+        int width = 200;   // 图像宽度（像素）
+        int height = 200;  // 图像高度（像素）
+        
+        // 4. 计算图像覆盖的实际范围（米）
+        float image_width_meters = width * resolution;   // 图像宽度对应的实际距离
+        float image_height_meters = height * resolution; // 图像高度对应的实际距离
+        
+        // 5. 计算点云中心
+        float cloud_center_x = (min_pt.x + max_pt.x) / 2.0f;
+        float cloud_center_y = (min_pt.y + max_pt.y) / 2.0f;
+        
+        // 6. 计算图像左下角在实际坐标系中的位置
+        // 让点云位于图像中心
+        float image_origin_x = cloud_center_x - image_width_meters / 2.0f;
+        float image_origin_y = cloud_center_y - image_height_meters / 2.0f;
+        
+        // 7. 计算图像右上角在实际坐标系中的位置
+        float image_max_x = image_origin_x + image_width_meters;
+        float image_max_y = image_origin_y + image_height_meters;
+        
+        // 记录调试信息
+        RCLCPP_DEBUG(this->get_logger(), 
+                    "图像参数: %dx%d 像素, 分辨率: %.6f m/px", width, height, resolution);
+        RCLCPP_DEBUG(this->get_logger(), 
+                    "图像覆盖范围: X [%.3f, %.3f] m, Y [%.3f, %.3f] m", 
+                    image_origin_x, image_max_x, image_origin_y, image_max_y);
+        RCLCPP_DEBUG(this->get_logger(), 
+                    "点云范围: X [%.3f, %.3f] m, Y [%.3f, %.3f] m", 
+                    min_pt.x, max_pt.x, min_pt.y, max_pt.y);
+        RCLCPP_DEBUG(this->get_logger(), 
+                    "点云中心: (%.3f, %.3f) m", cloud_center_x, cloud_center_y);
+        
+        // 8. 创建二值图像
         cv::Mat binary_image = cv::Mat::zeros(height, width, CV_8UC1);
 
-        // 4. 将点云投影到图像上（使用归一化方法，与参考代码一致）
-        for (const auto& point : feature_cloud->points) {
-            // 将点云的x坐标映射到图像宽度（列）
-            int img_x = static_cast<int>((point.x - min_pt.x) / x_range * (width - 1));
+        // 9. 将点云投影到图像上（将点云投影到图像中心）
+        int point_count = 0;
+        int out_of_bounds = 0;
+        
+        for (const auto& point : projected_cloud->points) {
+            // 计算像素坐标
+            // 列（水平方向）：对应点云x
+            int col = static_cast<int>((point.x - image_origin_x) / resolution);
             
-            // 将点云的y坐标映射到图像高度（行）
-            // 注意：点云的y对应图像的x轴，点云的z对应图像的y轴
-            // 但我们的特征点云主要是XY平面，所以这里使用x坐标映射到图像高度
-            int img_y = static_cast<int>((point.y - min_pt.y) / y_range * (height - 1));
+            // 行（垂直方向）：对应点云y
+            int row = static_cast<int>((point.y-image_origin_y) / resolution);
             
             // 确保坐标在图像范围内
-            if (img_x >= 0 && img_x < width && img_y >= 0 && img_y < height) {
-                binary_image.at<uchar>(img_y, img_x) = 255;
+            if (col >= 0 && col < width && row >= 0 && row < height) {
+                binary_image.at<uchar>(row, col) = 255;
+                point_count++;
+            } else {
+                out_of_bounds++;
             }
         }
-          
-        // 5. 形态学操作：先膨胀后腐蚀（闭操作），使特征更连续
-        // 使用固定核大小，而不是根据分辨率计算
-        int kernel_size = 5;  // 固定核大小
+        
+        if (point_count == 0) {
+            RCLCPP_WARN(this->get_logger(), "没有点被投影到图像中");
+            return std::make_pair(0.0, 0.0);
+        }
+        
+        // 计算点云在图像中的覆盖率
+        float coverage_ratio = static_cast<float>(point_count) / projected_cloud->size();
+        RCLCPP_DEBUG(this->get_logger(), 
+                    "投影统计: %d/%zu 点在图像内 (%.1f%%), %d 点在图像外",
+                    point_count, projected_cloud->size(), coverage_ratio * 100.0, out_of_bounds);
+        
+        // 如果覆盖率太低，说明图像尺寸可能不够大
+        if (coverage_ratio < 0.9f) {
+            RCLCPP_WARN(this->get_logger(), "点云在图像中的覆盖率较低 (%.1f%%)，考虑增大图像尺寸或调整分辨率",
+                       coverage_ratio * 100.0);
+        }
+        
+        // 10. 形态学操作：先膨胀后腐蚀（闭操作），使特征更连续
+        // 根据分辨率计算合适的核大小（约5mm）
+        int kernel_size = morphology_kernel_size_;
         if (kernel_size % 2 == 0) kernel_size++;  // 确保核大小为奇数
         
         cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, 
@@ -497,30 +663,43 @@ std::pair<double, double> FeatureExtractionNode::calculateBoundingBoxWithMorphol
             cv::dilate(processed_image, processed_image, kernel, cv::Point(-1,-1), dilation_iterations_);
         }
         
-        // 6. 可选：显示图像（用于调试）
+        // 11. 可选：显示图像（用于调试）
         if (debug_display_image_) {
-            // // 使用cv_bridge发布图像，与参考代码一致
-            // std_msgs::msg::Header header;
-            // header.frame_id = "ascamera_hp60c_camera_link_0";
-            // header.stamp = this->now();
+            // 为了可视化，可以创建一个带有标记的图像
+            cv::Mat display_image;
+            cv::cvtColor(processed_image, display_image, cv::COLOR_GRAY2BGR);
             
-            // // 发布二值图像
-            // sensor_msgs::msg::Image::SharedPtr binary_msg = 
-            //     cv_bridge::CvImage(header, "mono8", binary_image).toImageMsg();
-            // binary_image_pub_->publish(*binary_msg);
-            publishBinaryImage(processed_image, 
-                               "ascamera_hp60c_camera_link_0", 
-                               this->now(), 
-                               "binary_image");
+            // 在图像中心画一个十字标记，表示点云中心位置
+            int center_col = width / 2;
+            int center_row = height / 2;
+            cv::line(display_image, cv::Point(center_col - 10, center_row), 
+                    cv::Point(center_col + 10, center_row), cv::Scalar(0, 0, 255), 1);
+            cv::line(display_image, cv::Point(center_col, center_row - 10), 
+                    cv::Point(center_col, center_row + 10), cv::Scalar(0, 0, 255), 1);
+            
+            // 添加文本信息
+            std::string info_text = cv::format("Res: %.1fmm/px", resolution * 1000.0);
+            cv::putText(display_image, info_text, cv::Point(10, 30),
+                       cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 255, 255), 2);
+            
+            // 发布可视化图像
+            std_msgs::msg::Header header;
+            header.frame_id = "ascamera_hp60c_camera_link_0";
+            header.stamp = this->now();
+            
+            sensor_msgs::msg::Image::SharedPtr viz_msg = 
+                cv_bridge::CvImage(header, "bgr8", display_image).toImageMsg();
+            
+            if (visualization_pub_1) {
+                visualization_pub_1->publish(*viz_msg);
+            }
         }
         
-        // 8. 从处理后的图像中计算边界框尺寸
-        // 注意：现在需要将图像坐标转换回点云坐标
-        // 分辨率 = 实际范围 / 图像尺寸
-        float x_resolution = x_range / width;    // 每个像素在x方向的米数
-        float y_resolution = y_range / height;   // 每个像素在y方向的米数
-        
-        return calculateBoundingBoxFromImage(processed_image, min_pt.x, max_pt.y, x_resolution, y_resolution);
+        // 12. 从处理后的图像中计算边界框尺寸
+        // 注意：传递给calculateBoundingBoxFromImage的是图像覆盖的实际范围
+        return calculateBoundingBoxFromImage(processed_image, 
+                                           image_origin_x, image_max_y, 
+                                           resolution, resolution);
         
     } catch (const std::exception& e) {
         RCLCPP_ERROR(this->get_logger(), "Error in calculateBoundingBoxWithMorphology: %s", e.what());
@@ -528,8 +707,12 @@ std::pair<double, double> FeatureExtractionNode::calculateBoundingBoxWithMorphol
     }
 }
 
-// 从二值图像中计算边界框尺寸（根据分辨率反算）
-std::pair<double, double> FeatureExtractionNode::calculateBoundingBoxFromImage(const cv::Mat& binary_image, float min_x, float max_y, float x_resolution, float y_resolution)
+
+// 从二值图像中计算边界框尺寸（使用外接圆拟合）
+std::pair<double, double> FeatureExtractionNode::calculateBoundingBoxFromImage(
+    const cv::Mat& binary_image, 
+    float min_x, float max_y, 
+    float x_resolution, float y_resolution)
 {
     if (binary_image.empty() || cv::countNonZero(binary_image) == 0) {
         return std::make_pair(0.0, 0.0);
@@ -539,113 +722,242 @@ std::pair<double, double> FeatureExtractionNode::calculateBoundingBoxFromImage(c
         int width = binary_image.cols;
         int height = binary_image.rows;
         
-        // 1. 将y方向分成N个区间（类似于原始算法）
-        const int N = 100;
-        double max_width = 0.0;
-        cv::Point left_pt_pixel(-1, -1), right_pt_pixel(-1, -1);
+        // 1. 寻找轮廓
+        std::vector<std::vector<cv::Point>> contours;
+        std::vector<cv::Vec4i> hierarchy;
         
-        // 计算每个区间的y边界（像素行号）
-        std::vector<int> slice_boundaries(N + 1);
-        for (int i = 0; i <= N; ++i) {
-            slice_boundaries[i] = i * height / N;
-        }
+        // 使用RETR_EXTERNAL只获取最外层轮廓
+        cv::findContours(binary_image, contours, hierarchy, 
+                        cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
         
-        // 2. 遍历每个区间，找到x方向最宽的位置
-        for (int i = 0; i < N; ++i) {
-            int slice_v_min = slice_boundaries[i];
-            int slice_v_max = slice_boundaries[i + 1];
-            
-            // 在这个区间内统计x范围
-            int min_u = INT_MAX;
-            int max_u = -1;
-            cv::Point current_left_pt(-1, -1), current_right_pt(-1, -1);
-            
-            for (int v = slice_v_min; v < slice_v_max; v++) {
-                int row_min_u = INT_MAX;
-                int row_max_u = -1;
-                cv::Point row_left_pt(-1, -1), row_right_pt(-1, -1);
-                
-                // 扫描这一行
-                for (int u = 0; u < width; u++) {
-                    if (binary_image.at<uchar>(v, u) > 0) {
-                        if (u < row_min_u) {
-                            row_min_u = u;
-                            row_left_pt = cv::Point(u, v);
-                        }
-                        if (u > row_max_u) {
-                            row_max_u = u;
-                            row_right_pt = cv::Point(u, v);
-                        }
-                    }
-                }
-                
-                // 更新整个区间的x范围
-                if (row_min_u < min_u) {
-                    min_u = row_min_u;
-                    current_left_pt = row_left_pt;
-                }
-                if (row_max_u > max_u) {
-                    max_u = row_max_u;
-                    current_right_pt = row_right_pt;
-                }
-            }
-            
-            // 计算这个区间的宽度
-            if (min_u <= max_u) {
-                int width_pixels = max_u - min_u + 1;
-                
-                if (width_pixels > max_width) {
-                    max_width = width_pixels;
-                    left_pt_pixel = current_left_pt;
-                    right_pt_pixel = current_right_pt;
-                }
-            }
-        }
-        
-        if (max_width < 1e-6) {
+        if (contours.empty()) {
+            RCLCPP_DEBUG(this->get_logger(), "未找到轮廓");
             return std::make_pair(0.0, 0.0);
         }
         
-        // 3. 寻找最下面的点（y最小的点，对应图像中行号最大的点）
-        cv::Point bottom_pt_pixel(-1, -1);
-        for (int v = height - 1; v >= 0; v--) {
-            for (int u = 0; u < width; u++) {
-                if (binary_image.at<uchar>(v, u) > 0) {
-                    bottom_pt_pixel = cv::Point(u, v);
-                    break;
-                }
+        // 2. 找到最大轮廓（按面积）
+        int max_contour_idx = -1;
+        double max_area = 0.0;
+        
+        for (size_t i = 0; i < contours.size(); i++) {
+            double area = cv::contourArea(contours[i]);
+            if (area > max_area) {
+                max_area = area;
+                max_contour_idx = i;
             }
-            if (bottom_pt_pixel.x != -1) break;
         }
         
-        if (bottom_pt_pixel.x == -1) {
+        if (max_contour_idx == -1) {
+            RCLCPP_DEBUG(this->get_logger(), "未找到有效轮廓");
             return std::make_pair(0.0, 0.0);
         }
         
-        // 4. 计算最下面点到最宽直线的距离（像素单位）
-        // 使用点到直线的距离公式
-        double short_radius_pixels = calculatePointToLineDistancePixel(
-            bottom_pt_pixel, left_pt_pixel, right_pt_pixel);
+        // 3. 对最大轮廓进行最小外接圆拟合
+        std::vector<cv::Point> max_contour = contours[max_contour_idx];
+        cv::Point2f center;
+        float radius;
+        cv::minEnclosingCircle(max_contour, center, radius);
+        
+        // 4. 计算圆的直径（像素单位）
+        double diameter_pixels = radius * 2.0;
+        
+        RCLCPP_DEBUG(this->get_logger(), 
+                    "外接圆拟合 - 中心: (%.1f, %.1f), 半径: %.1f px, 直径: %.1f px",
+                    center.x, center.y, radius, diameter_pixels);
         
         // 5. 转换为实际尺寸
-        double x_length = max_width * x_resolution;
-        double y_diameter = short_radius_pixels * 2.0 * y_resolution;
+        // 由于图像在X和Y方向可能使用不同的分辨率，我们需要计算平均分辨率
+        // 或者根据圆的中心位置进行插值计算
+        
+        // 方法1：使用平均分辨率
+        double avg_resolution = (x_resolution + y_resolution) / 2.0;
+        double real_diameter = diameter_pixels * avg_resolution;
+        
+        
+        // 为了可视化，可以发布轮廓和外接圆信息
+        if (debug_display_image_) {
+            publishContourAndCircle(binary_image, contours[max_contour_idx], center, radius);
+        }
         
         RCLCPP_DEBUG(this->get_logger(),
-                    "Image analysis results - Max width: %.0f px at row %d, Bottom point at row %d",
-                    max_width, left_pt_pixel.y, bottom_pt_pixel.y);
+                    "实际尺寸 - 直径: %.3f m (使用平均分辨率: %.6f m/px)",
+                    real_diameter, avg_resolution);
         
-        RCLCPP_DEBUG(this->get_logger(),
-                    "Real dimensions - Length: %.3f m, Short diameter: %.3f m",
-                    x_length, y_diameter);
-        
-        return std::make_pair(x_length, y_diameter);
+        // 返回直径作为长度和宽度（因为是圆形）
+        return std::make_pair(real_diameter, real_diameter);
         
     } catch (const std::exception& e) {
         RCLCPP_ERROR(this->get_logger(), "Error in calculateBoundingBoxFromImage: %s", e.what());
         return std::make_pair(0.0, 0.0);
     }
+
 }
+
+
+// 发布轮廓和外接圆的可视化图像
+void FeatureExtractionNode::publishContourAndCircle(
+    const cv::Mat& binary_image,
+    const std::vector<cv::Point>& contour,
+    const cv::Point2f& circle_center,
+    float circle_radius)
+{
+    try {
+        // 创建彩色图像用于可视化
+        cv::Mat color_image;
+        cv::cvtColor(binary_image, color_image, cv::COLOR_GRAY2BGR);
+        
+        // 绘制轮廓（绿色）
+        cv::drawContours(color_image, std::vector<std::vector<cv::Point>>{contour}, 
+                        0, cv::Scalar(0, 255, 0), 2);
+        
+        // 绘制最小外接圆（红色）
+        cv::circle(color_image, circle_center, static_cast<int>(circle_radius), 
+                  cv::Scalar(0, 0, 255), 2);
+        
+        // 绘制圆心（蓝色）
+        cv::circle(color_image, circle_center, 3, cv::Scalar(255, 0, 0), -1);
+        
+        // 添加文本信息
+        std::string info_text = cv::format("Radius: %.1f px", circle_radius);
+        cv::putText(color_image, info_text, cv::Point(10, 30),
+                   cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(255, 255, 255), 2);
+        
+        // 发布可视化图像
+        std_msgs::msg::Header header;
+        header.frame_id = "ascamera_hp60c_camera_link_0";
+        header.stamp = this->now();
+        
+        sensor_msgs::msg::Image::SharedPtr viz_msg = 
+            cv_bridge::CvImage(header, "bgr8", color_image).toImageMsg();
+        
+        if (visualization_pub_2) {
+            visualization_pub_2->publish(*viz_msg);
+        }
+        
+        RCLCPP_DEBUG(this->get_logger(), "Published contour and circle visualization");
+        
+    } catch (const std::exception& e) {
+        RCLCPP_ERROR(this->get_logger(), "Error in publishContourAndCircle: %s", e.what());
+    }
+}
+// // 从二值图像中计算边界框尺寸（根据分辨率反算）
+// std::pair<double, double> FeatureExtractionNode::calculateBoundingBoxFromImage(const cv::Mat& binary_image, float min_x, float max_y, float x_resolution, float y_resolution)
+// {
+//     if (binary_image.empty() || cv::countNonZero(binary_image) == 0) {
+//         return std::make_pair(0.0, 0.0);
+//     }
+    
+//     try {
+//         int width = binary_image.cols;
+//         int height = binary_image.rows;
+        
+//         // 1. 将y方向分成N个区间（类似于原始算法）
+//         const int N = 100;
+//         double max_width = 0.0;
+//         cv::Point left_pt_pixel(-1, -1), right_pt_pixel(-1, -1);
+        
+//         // 计算每个区间的y边界（像素行号）
+//         std::vector<int> slice_boundaries(N + 1);
+//         for (int i = 0; i <= N; ++i) {
+//             slice_boundaries[i] = i * height / N;
+//         }
+        
+//         // 2. 遍历每个区间，找到x方向最宽的位置
+//         for (int i = 0; i < N; ++i) {
+//             int slice_v_min = slice_boundaries[i];
+//             int slice_v_max = slice_boundaries[i + 1];
+            
+//             // 在这个区间内统计x范围
+//             int min_u = INT_MAX;
+//             int max_u = -1;
+//             cv::Point current_left_pt(-1, -1), current_right_pt(-1, -1);
+            
+//             for (int v = slice_v_min; v < slice_v_max; v++) {
+//                 int row_min_u = INT_MAX;
+//                 int row_max_u = -1;
+//                 cv::Point row_left_pt(-1, -1), row_right_pt(-1, -1);
+                
+//                 // 扫描这一行
+//                 for (int u = 0; u < width; u++) {
+//                     if (binary_image.at<uchar>(v, u) > 0) {
+//                         if (u < row_min_u) {
+//                             row_min_u = u;
+//                             row_left_pt = cv::Point(u, v);
+//                         }
+//                         if (u > row_max_u) {
+//                             row_max_u = u;
+//                             row_right_pt = cv::Point(u, v);
+//                         }
+//                     }
+//                 }
+                
+//                 // 更新整个区间的x范围
+//                 if (row_min_u < min_u) {
+//                     min_u = row_min_u;
+//                     current_left_pt = row_left_pt;
+//                 }
+//                 if (row_max_u > max_u) {
+//                     max_u = row_max_u;
+//                     current_right_pt = row_right_pt;
+//                 }
+//             }
+            
+//             // 计算这个区间的宽度
+//             if (min_u <= max_u) {
+//                 int width_pixels = max_u - min_u + 1;
+                
+//                 if (width_pixels > max_width) {
+//                     max_width = width_pixels;
+//                     left_pt_pixel = current_left_pt;
+//                     right_pt_pixel = current_right_pt;
+//                 }
+//             }
+//         }
+        
+//         if (max_width < 1e-6) {
+//             return std::make_pair(0.0, 0.0);
+//         }
+        
+//         // 3. 寻找最下面的点（y最小的点，对应图像中行号最大的点）
+//         cv::Point bottom_pt_pixel(-1, -1);
+//         for (int v = height - 1; v >= 0; v--) {
+//             for (int u = 0; u < width; u++) {
+//                 if (binary_image.at<uchar>(v, u) > 0) {
+//                     bottom_pt_pixel = cv::Point(u, v);
+//                     break;
+//                 }
+//             }
+//             if (bottom_pt_pixel.x != -1) break;
+//         }
+        
+//         if (bottom_pt_pixel.x == -1) {
+//             return std::make_pair(0.0, 0.0);
+//         }
+        
+//         // 4. 计算最下面点到最宽直线的距离（像素单位）
+//         // 使用点到直线的距离公式
+//         double short_radius_pixels = calculatePointToLineDistancePixel(
+//             bottom_pt_pixel, left_pt_pixel, right_pt_pixel);
+        
+//         // 5. 转换为实际尺寸
+//         double x_length = max_width * x_resolution;
+//         double y_diameter = short_radius_pixels * 2.0 * y_resolution;
+        
+//         RCLCPP_DEBUG(this->get_logger(),
+//                     "Image analysis results - Max width: %.0f px at row %d, Bottom point at row %d",
+//                     max_width, left_pt_pixel.y, bottom_pt_pixel.y);
+        
+//         RCLCPP_DEBUG(this->get_logger(),
+//                     "Real dimensions - Length: %.3f m, Short diameter: %.3f m",
+//                     x_length, y_diameter);
+        
+//         return std::make_pair(x_length, y_diameter);
+        
+//     } catch (const std::exception& e) {
+//         RCLCPP_ERROR(this->get_logger(), "Error in calculateBoundingBoxFromImage: %s", e.what());
+//         return std::make_pair(0.0, 0.0);
+//     }
+// }
 
 
 // 发布二值图像
